@@ -1,0 +1,4 @@
+pnpm exec lint-staged
+pnpm run typecheck:backend
+pnpm run typecheck:frontend
+pnpm run typecheck:landing

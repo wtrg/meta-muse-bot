@@ -1,0 +1,77 @@
+name = "spinupmail-e2e"
+main = "src/index.e2e.ts"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[placement]
+mode = "smart"
+
+[triggers]
+crons = ["17 * * * *"]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["InboundAbuseCounterDurableObject"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["FixedWindowRateLimiterDurableObject"]
+
+[[durable_objects.bindings]]
+name = "ABUSE_COUNTERS"
+class_name = "InboundAbuseCounterDurableObject"
+
+[[durable_objects.bindings]]
+name = "FIXED_WINDOW_RATE_LIMITERS"
+class_name = "FixedWindowRateLimiterDurableObject"
+
+[[d1_databases]]
+binding = "SUM_DB"
+database_name = "SUM_DB"
+database_id = "a5ed1fb3-600a-45bb-991f-ad8be7170c49"
+migrations_dir = "drizzle"
+
+[[kv_namespaces]]
+binding = "SUM_KV"
+id = "442502dbafb4409999092c94e7784fad"
+
+[[r2_buckets]]
+bucket_name = "spinupmail-attachments"
+binding = "R2_BUCKET"
+
+[[send_email]]
+name = "EMAIL"
+
+[[queues.producers]]
+binding = "INTEGRATION_DISPATCH_QUEUE"
+queue = "spinupmail-e2e-integration-dispatches"
+
+[[queues.consumers]]
+queue = "spinupmail-e2e-integration-dispatches"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 2
+dead_letter_queue = "spinupmail-e2e-integration-dispatches-dlq"
+
+[vars]
+EMAIL_DOMAINS = "spinupmail.com,spinupmail.dev"
+MAX_ADDRESSES_PER_ORGANIZATION = "100"
+MAX_INTEGRATIONS_PER_ORGANIZATION = "3"
+MAX_INTEGRATION_DISPATCHES_PER_ORGANIZATION_PER_DAY = "100"
+OPERATIONAL_EVENT_RETENTION_DAYS = "30"
+OPERATIONAL_EVENT_MAX_METADATA_BYTES = "4096"
+OPERATIONAL_EVENT_NOISY_RATE_LIMIT_WINDOW_SECONDS = "300"
+OPERATIONAL_EVENT_NOISY_RATE_LIMIT_MAX = "1"
+RESEND_FROM_EMAIL = "Spinupmail <verify@spinupmail.com>"
+EMAIL_MAX_BYTES = "10485760"
+EMAIL_BODY_MAX_BYTES = "524288"
+EMAIL_ATTACHMENT_MAX_BYTES = "10485760"
+EMAIL_ATTACHMENT_MAX_TOTAL_BYTES_PER_ORGANIZATION = "104857600"
+ENABLE_E2E_TEST_UTILS = "1"
+INTEGRATION_QUEUE_RETRY_WINDOW_SECONDS = "21600"
+INTEGRATION_QUEUE_BASE_DELAY_SECONDS = "30"
+INTEGRATION_QUEUE_MAX_DELAY_SECONDS = "1800"
+INTEGRATION_QUEUE_JITTER_SECONDS = "10"

@@ -1,0 +1,20 @@
+name = "spinupmail-lite-router"
+main = "src/index.ts"
+compatibility_date = "2026-06-05"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[vars]
+LITE_WEBHOOK_URL = "https://example.com/spinupmail/webhook"
+LITE_ALLOWED_RECIPIENTS = ""
+LITE_MAX_BYTES = "524288"
+LITE_BODY_MAX_BYTES = "65536"
+LITE_INCLUDE_RAW = "false"
+LITE_DELIVERY_TIMEOUT_MS = "8000"
+LITE_REJECT_ON_FAILURE = "true"
+
+# Configure secrets with:
+# pnpm exec wrangler secret put LITE_WEBHOOK_SECRET
+# pnpm exec wrangler secret put LITE_WEBHOOK_BEARER_TOKEN

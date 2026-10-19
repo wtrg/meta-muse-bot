@@ -1,0 +1,109 @@
+# Example Wrangler config
+# Make a copy of this file and name it as `wrangler.toml`
+# Replace placeholder IDs with your Cloudflare resource IDs.
+
+name = "spinupmail"
+main = "src/index.ts"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[placement]
+mode = "smart"
+
+[triggers]
+crons = ["17 * * * *"]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["InboundAbuseCounterDurableObject"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["FixedWindowRateLimiterDurableObject"]
+
+[[durable_objects.bindings]]
+name = "ABUSE_COUNTERS"
+class_name = "InboundAbuseCounterDurableObject"
+
+[[durable_objects.bindings]]
+name = "FIXED_WINDOW_RATE_LIMITERS"
+class_name = "FixedWindowRateLimiterDurableObject"
+
+[[d1_databases]]
+binding = "SUM_DB"
+database_name = "SUM_DB"
+database_id = "YOUR_D1_DATABASE_ID"
+migrations_dir = "drizzle"
+
+[[kv_namespaces]]
+binding = "SUM_KV"
+id = "YOUR_KV_NAMESPACE_ID"
+
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "YOUR_R2_BUCKET_NAME"
+# Optional for local/preview
+preview_bucket_name = "YOUR_R2_PREVIEW_BUCKET_NAME"
+
+[[send_email]]
+name = "EMAIL"
+
+[[queues.producers]]
+queue = "spinupmail-integration-dispatches"
+binding = "INTEGRATION_DISPATCH_QUEUE"
+
+[[queues.consumers]]
+queue = "spinupmail-integration-dispatches"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 2
+dead_letter_queue = "spinupmail-integration-dispatches-dlq"
+
+[vars]
+EMAIL_DOMAINS = "example.com,example-test.com"
+FORCED_MAIL_PREFIX = "" # e.g. if set to "temp", all addresses will start with "temp-"
+AUTH_ALLOWED_EMAIL_DOMAIN = "example.com"
+DASHBOARD_BASE_URL = "https://app.example.com" # optional: used for Telegram "Open in Dashboard" button
+EXTENSION_REDIRECT_ORIGINS = "https://your-chromium-extension-id.chromiumapp.org"
+MAX_ADDRESSES_PER_ORGANIZATION = "10"
+MAX_INTEGRATIONS_PER_ORGANIZATION = "3"
+MAX_INTEGRATION_DISPATCHES_PER_ORGANIZATION_PER_DAY = "100"
+MAX_RECEIVED_EMAILS_PER_ORGANIZATION = "1000"
+MAX_RECEIVED_EMAILS_PER_ADDRESS = "100"
+OPERATIONAL_EVENT_RETENTION_DAYS = "30"
+OPERATIONAL_EVENT_MAX_METADATA_BYTES = "4096"
+OPERATIONAL_EVENT_NOISY_RATE_LIMIT_WINDOW_SECONDS = "300"
+OPERATIONAL_EVENT_NOISY_RATE_LIMIT_MAX = "1"
+API_KEY_RATE_LIMIT_WINDOW = "60"
+API_KEY_RATE_LIMIT_MAX = "120"
+AUTH_RATE_LIMIT_WINDOW = "60"
+# Optional: set to override Better Auth's default global max
+AUTH_RATE_LIMIT_MAX = "100"
+AUTH_CHANGE_EMAIL_RATE_LIMIT_WINDOW = "3600"
+AUTH_CHANGE_EMAIL_RATE_LIMIT_MAX = "2"
+RESEND_FROM_EMAIL = "Spinupmail <verify@example.com>"
+# Configure secrets via `wrangler secret put`:
+# BETTER_AUTH_SECRET, BETTER_AUTH_BASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, RESEND_API_KEY, TURNSTILE_SECRET_KEY, INTEGRATION_SECRET_ENCRYPTION_KEY
+# INTEGRATION_SECRET_ENCRYPTION_KEY must be a base64-encoded 32-byte AES-GCM key.
+EMAIL_FORWARD_TO = ""
+EMAIL_MAX_BYTES = "524288"
+# Max body text/html bytes persisted per email row (oversized bodies are dropped)
+EMAIL_BODY_MAX_BYTES = "524288"
+EMAIL_ATTACHMENT_MAX_BYTES = "10485760"
+# Cap total stored email attachment bytes per organization; defaults to 104857600 (100MB).
+# New attachments are skipped once the organization would exceed this quota.
+EMAIL_ATTACHMENT_MAX_TOTAL_BYTES_PER_ORGANIZATION = "104857600"
+# Set to "false" to ignore inbound attachments and disable attachment download/UI surfaces
+EMAIL_ATTACHMENTS_ENABLED = "true"
+# Storage optimization flags (default false when unset)
+EMAIL_STORE_HEADERS_IN_DB = "false"
+EMAIL_STORE_RAW_IN_DB = "false"
+# Optional debug mode: store raw MIME in private R2 for authenticated retrieval
+EMAIL_STORE_RAW_IN_R2 = "false"
+INTEGRATION_QUEUE_RETRY_WINDOW_SECONDS = "21600"
+INTEGRATION_QUEUE_BASE_DELAY_SECONDS = "30"
+INTEGRATION_QUEUE_MAX_DELAY_SECONDS = "1800"
+INTEGRATION_QUEUE_JITTER_SECONDS = "10"

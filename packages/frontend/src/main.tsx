@@ -1,0 +1,271 @@
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import {
+  createBrowserRouter,
+  redirect,
+  type DataRouteMatch,
+  type RouteObject,
+} from "react-router";
+import { RouterProvider } from "react-router/dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
+import { ThemeProvider } from "@/components/theme-provider";
+import { Toaster } from "@/components/ui/sonner";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  requireActiveOrganizationLoader,
+  requireNoActiveOrganizationLoader,
+  requirePlatformAdminLoader,
+  redirectIfAuthenticatedLoader,
+} from "@/features/auth/hooks/route-loaders";
+import { AuthProvider } from "@/features/auth/hooks/use-auth";
+import { TimezoneProvider } from "@/features/timezone/hooks/use-timezone";
+import { AddressManagementPage } from "@/pages/address-management-page";
+import { AdminPage } from "@/pages/admin-page";
+import { HomePage } from "@/pages/home-page";
+import { InboxPage } from "@/pages/inbox-page";
+import { NotFoundPage } from "@/pages/not-found-page";
+import { OrganizationOnboardingPage } from "@/pages/organization-onboarding-page";
+import { OrganizationSettingsPage } from "@/pages/organization-settings-page";
+import { PrivacyPolicyPage } from "@/pages/privacy-policy-page";
+import { ProtectedLayoutPage } from "@/pages/protected-layout-page";
+import { ResetPasswordPage } from "@/pages/reset-password-page";
+import { RouteErrorPage } from "@/pages/route-error-page";
+import { SettingsPage } from "@/pages/settings-page";
+import { SignInPage } from "@/pages/sign-in-page";
+import { SignInTwoFactorPage } from "@/pages/sign-in-two-factor-page";
+import { SignupPage } from "@/pages/signup-page";
+import { TermsOfServicePage } from "@/pages/terms-of-service-page";
+import { VerifyEmailPage } from "@/pages/verify-email-page";
+import { PublicOtpPage } from "@/pages/public-otp-page";
+import { BulkCreatePage } from "@/pages/bulk-create-page";
+import { MuseBotPage } from "@/pages/muse-bot-page";
+import { APP_NAME } from "@/lib/app";
+import {
+  matchesManageDocumentTitle,
+  resolveDocumentTitle,
+} from "@/lib/route-title";
+import "./index.css";
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
+
+const hydrationFallbackElement = (
+  <div className="flex min-h-screen items-center justify-center">
+    <div className="flex items-center gap-2 rounded-md border border-border/70 bg-card/60 px-3 py-2 text-sm text-muted-foreground">
+      <Spinner className="size-4" />
+      <span>Loading inbox...</span>
+    </div>
+  </div>
+);
+
+const syncDocumentTitle = (matches: DataRouteMatch[]) => {
+  if (matchesManageDocumentTitle(matches)) {
+    return;
+  }
+
+  document.title = resolveDocumentTitle(matches, APP_NAME);
+};
+
+const routes: RouteObject[] = [
+  {
+    path: "/otp",
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <PublicOtpPage />,
+    errorElement: <RouteErrorPage />,
+    handle: { title: "Lấy mã OTP Muse.ai" },
+  },
+  {
+    path: "/bulk",
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <BulkCreatePage />,
+    errorElement: <RouteErrorPage />,
+    handle: { title: "Tạo Email Hàng Loạt & Bắt OTP" },
+  },
+  {
+    path: "/muse",
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <MuseBotPage />,
+    errorElement: <RouteErrorPage />,
+    handle: { title: "Tự Động Tạo Tài Khoản Muse.ai" },
+  },
+  {
+    path: "/muse-bot",
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <MuseBotPage />,
+    errorElement: <RouteErrorPage />,
+    handle: { title: "Tự Động Tạo Tài Khoản Muse.ai" },
+  },
+  {
+    path: "/sign-in",
+    loader: redirectIfAuthenticatedLoader,
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <SignInPage />,
+    errorElement: <RouteErrorPage />,
+    handle: { title: "Sign In" },
+  },
+  {
+    path: "/signup",
+    loader: redirectIfAuthenticatedLoader,
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <SignupPage />,
+    errorElement: <RouteErrorPage />,
+    handle: { title: "Sign Up" },
+  },
+  {
+    path: "/sign-in/2fa",
+    loader: redirectIfAuthenticatedLoader,
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <SignInTwoFactorPage />,
+    errorElement: <RouteErrorPage />,
+    handle: { title: "Two-factor Verification" },
+  },
+  {
+    path: "/reset-password",
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <ResetPasswordPage />,
+    errorElement: <RouteErrorPage />,
+    handle: { title: "Reset Password" },
+  },
+  {
+    path: "/verify-email",
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <VerifyEmailPage />,
+    errorElement: <RouteErrorPage />,
+    handle: { title: "Verify Email" },
+  },
+  {
+    path: "/terms",
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <TermsOfServicePage />,
+    errorElement: <RouteErrorPage />,
+    handle: { title: "Terms of Service" },
+  },
+  {
+    path: "/privacy",
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <PrivacyPolicyPage />,
+    errorElement: <RouteErrorPage />,
+    handle: { title: "Privacy Policy" },
+  },
+  {
+    path: "/onboarding/organization",
+    loader: requireNoActiveOrganizationLoader,
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <OrganizationOnboardingPage />,
+    errorElement: <RouteErrorPage />,
+    handle: { title: "Organization Onboarding" },
+  },
+  {
+    path: "/admin",
+    loader: requirePlatformAdminLoader,
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <ProtectedLayoutPage />,
+    errorElement: <RouteErrorPage />,
+    children: [
+      {
+        index: true,
+        element: <AdminPage />,
+        handle: { title: "Admin" },
+      },
+    ],
+  },
+  {
+    path: "/",
+    loader: () => redirect("/muse"),
+  },
+  {
+    path: "/app",
+    loader: requireActiveOrganizationLoader,
+    hydrateFallbackElement: hydrationFallbackElement,
+    element: <ProtectedLayoutPage />,
+    errorElement: <RouteErrorPage />,
+    children: [
+      {
+        index: true,
+        element: <HomePage />,
+        handle: { title: "Overview" },
+      },
+      {
+        path: "inbox",
+        element: <InboxPage />,
+        handle: { title: "Inbox", managesDocumentTitle: true },
+      },
+      {
+        path: "inbox/:addressId",
+        element: <InboxPage />,
+        handle: { title: "Address List", managesDocumentTitle: true },
+      },
+      {
+        path: "inbox/:addressId/:mailId",
+        element: <InboxPage />,
+        handle: { title: "View Email", managesDocumentTitle: true },
+      },
+      {
+        path: "addresses",
+        element: <AddressManagementPage />,
+        handle: { title: "Address Management" },
+        children: [
+          {
+            path: "edit/:addressId",
+            element: null,
+            handle: { title: "Address Management" },
+          },
+        ],
+      },
+      {
+        path: "settings",
+        element: <SettingsPage />,
+        handle: { title: "Account Settings" },
+      },
+      {
+        path: "organization/settings",
+        element: <OrganizationSettingsPage />,
+        handle: { title: "Organization Settings" },
+      },
+      {
+        path: "*",
+        element: <NotFoundPage />,
+        handle: { title: "Not Found" },
+      },
+    ],
+  },
+  {
+    path: "*",
+    loader: () => redirect("/"),
+  },
+];
+
+const router = createBrowserRouter(routes);
+syncDocumentTitle(router.state.matches);
+const unsubscribeRouter = router.subscribe(state => {
+  syncDocumentTitle(state.matches);
+});
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    unsubscribeRouter();
+  });
+}
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <ThemeProvider defaultTheme="dark" storageKey="ui-theme">
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <TimezoneProvider>
+            <RouterProvider router={router} />
+          </TimezoneProvider>
+        </AuthProvider>
+        <Toaster position="top-center" />
+        <ReactQueryDevtools initialIsOpen={false} />
+      </QueryClientProvider>
+    </ThemeProvider>
+  </StrictMode>
+);

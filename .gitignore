@@ -1,0 +1,72 @@
+# prod
+dist/
+
+# dev
+.yarn/
+!.yarn/releases
+.vscode/*
+!.vscode/launch.json
+!.vscode/*.code-snippets
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/workspace.xml
+.idea/usage.statistics.xml
+.idea/shelf
+
+# deps
+node_modules/
+.wrangler
+
+# env
+.env
+.env.local
+.env.*.local
+.env.production
+.dev.vars
+packages/api/wrangler.toml
+
+# logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# test artifacts
+coverage/
+playwright-report/
+test-results/
+blob-report/
+
+# misc
+.DS_Store
+
+# muse bot runtime, accounts, and exports
+scripts/muse_accounts.json
+scripts/muse_accounts.txt
+muse_accounts.txt
+muse_session_*
+scripts/exports/
+scripts/screenshots/
+scripts/*.png
+scripts/active_us_proxy.json
+scripts/scraped_proxies.txt
+
+# binaries & psiphon core
+bin/
+scripts/psiphon/
+*.exe
+
+# chrome profiles & python caches
+scripts/chrome_test_profile/
+__pycache__/
+*.pyc
+
+# test accounts, cookies, and dumps
+scripts/*account*.json
+scripts/*cookies*.json
+scripts/muse_page_dump.html
+scripts/fast_us_proxies.json
+scripts/live_us_proxies.json

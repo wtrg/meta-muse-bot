@@ -1,0 +1,120 @@
+name: Test Pipeline
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Backend typecheck
+        run: pnpm run typecheck:backend
+
+      - name: Backend build
+        run: pnpm run build:backend
+
+      - name: Frontend typecheck
+        run: pnpm run typecheck:frontend
+
+      - name: Extension typecheck
+        run: pnpm run typecheck:extension
+
+      - name: Extension build
+        run: pnpm run build:extension
+
+      - name: SDK build
+        run: pnpm run build:sdk
+
+      - name: SDK typecheck
+        run: pnpm run typecheck:sdk
+
+      - name: Lite Router build
+        run: pnpm run build:lite-router
+
+      - name: Lite Router typecheck
+        run: pnpm run typecheck:lite-router
+
+      - name: Landing typecheck
+        run: pnpm run typecheck:landing
+
+      - name: Unit tests
+        run: pnpm run test:unit
+
+      - name: SDK tests
+        run: pnpm run test:sdk
+
+      - name: SDK package smoke
+        run: pnpm run test:package:sdk
+
+      - name: Lite Router tests
+        run: pnpm run test:lite-router
+
+      - name: Lite Router package smoke
+        run: pnpm -C packages/lite-router test:package
+
+      - name: Landing tests
+        run: pnpm run test:landing
+
+      - name: Backend integration tests
+        run: pnpm run test:integration
+
+      - name: Backend worker-runtime integration tests
+        run: pnpm -C packages/backend test:integration:workers
+
+      - name: Frontend component tests
+        run: pnpm run test:component
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright (chromium)
+        run: pnpm -C packages/e2e exec playwright install chromium
+
+      - name: E2E shard ${{ matrix.shard }}
+        run: pnpm -C packages/e2e exec playwright test --config ./playwright.config.ts --shard=${{ matrix.shard }}

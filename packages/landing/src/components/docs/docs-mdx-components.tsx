@@ -1,0 +1,263 @@
+import { isValidElement, useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { DocsCallout } from "./docs-callout";
+import { ApiEndpointReference } from "./docs-api-reference";
+import { formatCodeLanguageLabel, inferMdxCodeTitle } from "./docs-code-meta";
+import type { ComponentProps, ReactNode } from "react";
+import { cn } from "@/lib/utils";
+
+type EndpointProps = {
+  method: "GET" | "POST" | "PATCH" | "DELETE";
+  path: string;
+  children?: ReactNode;
+};
+
+const endpointTone: Record<EndpointProps["method"], string> = {
+  GET: "border-emerald-400/35 bg-emerald-400/12 text-emerald-200",
+  POST: "border-sky-400/35 bg-sky-400/12 text-sky-200",
+  PATCH: "border-amber-400/35 bg-amber-400/12 text-amber-200",
+  DELETE: "border-rose-400/35 bg-rose-400/12 text-rose-200",
+};
+
+function DocsEndpoint({ method, path, children }: EndpointProps) {
+  return (
+    <div className="border border-border/70 bg-card/75 px-4 py-3 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span
+          className={cn(
+            "rounded-md border px-1.5 py-0.5 font-mono text-[11px] font-semibold",
+            endpointTone[method]
+          )}
+        >
+          {method}
+        </span>
+        <code className="font-mono text-[15px] text-foreground">{path}</code>
+      </div>
+      {children ? (
+        <div className="mt-2 text-[15px] leading-relaxed text-muted-foreground">
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function flattenNodeText(node: unknown): string {
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node);
+  }
+
+  if (Array.isArray(node)) {
+    return node.map(flattenNodeText).join("");
+  }
+
+  if (isValidElement(node)) {
+    const props = node.props as { children?: unknown; "data-line"?: string };
+    const content = flattenNodeText(props.children);
+    if (props["data-line"] !== undefined) {
+      return `${content}\n`;
+    }
+    return content;
+  }
+
+  return "";
+}
+
+function DocsMdxPre({ className, children, ...props }: ComponentProps<"pre">) {
+  const [copied, setCopied] = useState(false);
+  const attrs = props as Record<string, unknown>;
+  const language = String(attrs["data-language"] ?? "text");
+  const rawCode = flattenNodeText(children).replace(/\n$/, "");
+  const snippetTitle = inferMdxCodeTitle(language, rawCode);
+  const languageLabel = formatCodeLanguageLabel(language);
+
+  const handleCopy = async () => {
+    if (typeof window === "undefined" || !rawCode) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(rawCode);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="docs-code-shell">
+      <div className="docs-code-toolbar">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="docs-code-language-badge">{languageLabel}</span>
+          <span className="docs-code-title">{snippetTitle}</span>
+        </div>
+
+        <button
+          type="button"
+          className={cn(
+            "docs-code-copy-button",
+            copied && "docs-code-copy-button-copied"
+          )}
+          onClick={() => void handleCopy()}
+          aria-label={`Copy ${snippetTitle} snippet`}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+
+      <pre className={cn("docs-code-pre", className)} {...props}>
+        {children}
+      </pre>
+    </div>
+  );
+}
+
+function DocsInlineCode({
+  className,
+  children,
+  ...props
+}: ComponentProps<"code">) {
+  const hasTokenChildren = Array.isArray(children) || isValidElement(children);
+  const isBlockCode =
+    hasTokenChildren ||
+    className?.includes("language-") ||
+    "data-language" in props ||
+    "data-theme" in props;
+
+  if (isBlockCode) {
+    return (
+      <code className={className} {...props}>
+        {children}
+      </code>
+    );
+  }
+
+  return (
+    <code
+      className="rounded-md border border-white/14 bg-white/6 px-1.5 py-0.5 font-mono text-[13px] text-foreground"
+      {...props}
+    >
+      {children}
+    </code>
+  );
+}
+
+function DocsLink({
+  href = "",
+  children,
+}: {
+  href?: string;
+  children?: ReactNode;
+}) {
+  if (href.startsWith("/docs")) {
+    const slug = href.replace("/docs/", "");
+
+    if (href === "/docs" || href === "/docs/") {
+      return (
+        <Link
+          to="/docs"
+          className="underline decoration-dotted underline-offset-4 hover:text-foreground"
+        >
+          {children}
+        </Link>
+      );
+    }
+
+    if (slug.includes("#")) {
+      const [slugValue, hash] = slug.split("#");
+      return (
+        <Link
+          to="/docs/$slug"
+          params={{ slug: slugValue }}
+          hash={hash}
+          className="underline decoration-dotted underline-offset-4 hover:text-foreground"
+        >
+          {children}
+        </Link>
+      );
+    }
+
+    return (
+      <Link
+        to="/docs/$slug"
+        params={{ slug }}
+        className="underline decoration-dotted underline-offset-4 hover:text-foreground"
+      >
+        {children}
+      </Link>
+    );
+  }
+
+  if (href.startsWith("/")) {
+    return (
+      <Link
+        to={href}
+        className="underline decoration-dotted underline-offset-4 hover:text-foreground"
+      >
+        {children}
+      </Link>
+    );
+  }
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="underline decoration-dotted underline-offset-4 hover:text-foreground"
+    >
+      {children}
+    </a>
+  );
+}
+
+export const docsMdxComponents = {
+  h2: (props: ComponentProps<"h2">) => (
+    <h2
+      className="scroll-mt-28 text-[1.85rem] font-semibold tracking-tight"
+      {...props}
+    />
+  ),
+  h3: (props: ComponentProps<"h3">) => (
+    <h3
+      className="scroll-mt-28 text-2xl font-semibold tracking-tight"
+      {...props}
+    />
+  ),
+  p: (props: ComponentProps<"p">) => (
+    <p className="text-[16px] leading-8 text-foreground/92" {...props} />
+  ),
+  ul: (props: ComponentProps<"ul">) => (
+    <ul
+      className="space-y-2.5 pl-6 text-[16px] leading-8 marker:text-foreground/60"
+      {...props}
+    />
+  ),
+  ol: (props: ComponentProps<"ol">) => (
+    <ol
+      className="space-y-2.5 pl-6 text-[16px] leading-8 marker:text-foreground/60"
+      {...props}
+    />
+  ),
+  li: (props: ComponentProps<"li">) => <li {...props} />,
+  table: (props: ComponentProps<"table">) => (
+    <div className="docs-reference-table-wrap">
+      <table className="docs-reference-table" {...props} />
+    </div>
+  ),
+  thead: (props: ComponentProps<"thead">) => <thead {...props} />,
+  tbody: (props: ComponentProps<"tbody">) => <tbody {...props} />,
+  tr: (props: ComponentProps<"tr">) => <tr {...props} />,
+  th: (props: ComponentProps<"th">) => <th {...props} />,
+  td: (props: ComponentProps<"td">) => <td {...props} />,
+  figure: (props: ComponentProps<"figure">) => (
+    <figure className="my-6" {...props} />
+  ),
+  a: DocsLink,
+  pre: DocsMdxPre,
+  code: DocsInlineCode,
+  Callout: DocsCallout,
+  Endpoint: DocsEndpoint,
+  ApiEndpointReference,
+};

@@ -1,0 +1,85 @@
+{
+  "name": "@spinupmail/workspace",
+  "private": true,
+  "license": "MIT",
+  "packageManager": "pnpm@11.22.0",
+  "scripts": {
+    "dev:backend": "pnpm -C packages/backend dev",
+    "bot": "python scripts/bot_server.py",
+    "build:backend": "pnpm -C packages/backend build",
+    "build:lite-router": "pnpm -C packages/lite-router build",
+    "deploy:backend": "pnpm -C packages/backend deploy",
+    "cf-typegen": "pnpm -C packages/backend cf-typegen",
+    "auth:update": "pnpm -C packages/backend auth:update",
+    "db:generate": "pnpm -C packages/backend db:generate",
+    "db:migrate:dev": "pnpm -C packages/backend db:migrate:dev",
+    "db:migrate:prod": "pnpm -C packages/backend db:migrate:prod",
+    "db:studio:dev": "pnpm -C packages/backend db:studio:dev",
+    "db:studio:prod": "pnpm -C packages/backend db:studio:prod",
+    "dev:frontend": "pnpm -C packages/frontend dev",
+    "dev:extension": "pnpm -C packages/extension dev",
+    "dev:extension:firefox": "pnpm -C packages/extension dev:firefox",
+    "build:frontend": "pnpm -C packages/frontend build",
+    "build:extension": "pnpm -C packages/extension build",
+    "build:extension:firefox": "pnpm -C packages/extension build:firefox",
+    "build:sdk": "pnpm -C packages/sdk build",
+    "typecheck:backend": "pnpm -C packages/backend typecheck",
+    "typecheck:lite-router": "pnpm -C packages/lite-router typecheck",
+    "typecheck:frontend": "pnpm -C packages/frontend typecheck",
+    "typecheck:extension": "pnpm -C packages/extension typecheck",
+    "typecheck:sdk": "pnpm -C packages/sdk typecheck",
+    "typecheck:landing": "pnpm -C packages/landing typecheck",
+    "deploy:frontend": "pnpm -C packages/frontend deploy",
+    "test:unit": "pnpm -C packages/backend test:unit && pnpm -C packages/frontend test:unit && pnpm -C packages/extension test:unit",
+    "test:sdk": "pnpm -C packages/sdk test",
+    "test:lite-router": "pnpm -C packages/lite-router test",
+    "test:package:sdk": "pnpm -C packages/sdk test:package",
+    "test:package:lite-router": "pnpm -C packages/lite-router test:package",
+    "test:landing": "pnpm -C packages/landing test",
+    "test:integration": "pnpm -C packages/backend test:integration",
+    "test:integration:workers": "pnpm -C packages/backend test:integration:workers",
+    "test:component": "pnpm -C packages/frontend test:component",
+    "test:e2e": "pnpm -C packages/e2e test",
+    "test:ci": "pnpm run lint && pnpm run build:backend && pnpm run build:sdk && pnpm run build:lite-router && pnpm run build:extension && pnpm run typecheck:frontend && pnpm run typecheck:extension && pnpm run typecheck:sdk && pnpm run typecheck:lite-router && pnpm run typecheck:landing && pnpm run test:unit && pnpm run test:sdk && pnpm run test:lite-router && pnpm run test:package:sdk && pnpm run test:package:lite-router && pnpm run test:landing && pnpm run test:integration && pnpm run test:integration:workers && pnpm run test:component && pnpm run test:e2e",
+    "dev:landing": "pnpm -C packages/landing dev",
+    "build:landing": "pnpm -C packages/landing build",
+    "deploy:landing": "pnpm -C packages/landing deploy",
+    "lint": "pnpm run lint:root && pnpm run lint:landing",
+    "lint:backend": "eslint packages/backend",
+    "lint:landing": "pnpm -C packages/landing exec eslint .",
+    "lint:root": "eslint packages/backend packages/frontend packages/extension packages/sdk packages/lite-router eslint.config.mjs",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@vitest/coverage-v8": "^4.1.11",
+    "eslint": "^10.10.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.6",
+    "eslint-plugin-react-you-might-not-need-an-effect": "^1.0.2",
+    "globals": "^17.12.0",
+    "husky": "^9.1.7",
+    "jsdom": "^30.0.1",
+    "lint-staged": "^17.5.1",
+    "prettier": "^3.9.6",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.70.0",
+    "vitest": "^4.1.11"
+  },
+  "lint-staged": {
+    "packages/{backend,frontend,extension,sdk,lite-router}/**/*.{js,mjs,cjs,ts,tsx}": [
+      "pnpm exec eslint --quiet --fix --no-warn-ignored"
+    ],
+    "eslint.config.mjs": [
+      "pnpm exec eslint --quiet --fix --no-warn-ignored"
+    ],
+    "packages/landing/**/*.{js,mjs,cjs,ts,tsx}": [
+      "pnpm -C packages/landing exec eslint --fix --no-warn-ignored"
+    ],
+    "**/*.{js,mjs,cjs,ts,tsx,jsx,json,css,md,html}": [
+      "prettier --write --ignore-unknown"
+    ]
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "name": "@spinupmail/backend",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc -b --noEmit",
+    "deploy": "pnpm run db:migrate:prod && pnpm exec wrangler deploy --minify",
+    "cf-typegen": "pnpm exec wrangler types --env-interface CloudflareBindings",
+    "auth:generate": "npx --yes @better-auth/cli@latest generate --config src/auth/cli.ts --output src/db/auth.schema.ts -y",
+    "auth:format": "npx --yes prettier --write src/db/auth.schema.ts",
+    "auth:update": "pnpm run auth:generate && pnpm run auth:format",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:dev": "pnpm exec wrangler d1 migrations apply SUM_DB --local",
+    "db:migrate:e2e": "pnpm exec wrangler d1 migrations apply SUM_DB --local --config wrangler.e2e.toml",
+    "db:migrate:prod": "CI=1 pnpm exec wrangler d1 migrations apply SUM_DB --remote",
+    "db:studio:dev": "drizzle-kit studio",
+    "db:studio:prod": "NODE_ENV=production drizzle-kit studio",
+    "test:unit": "pnpm exec vitest run --config vitest.unit.config.ts",
+    "test:integration": "pnpm exec vitest run --config vitest.integration.config.ts",
+    "test:integration:workers": "pnpm exec vitest run --config vitest.workers.config.ts"
+  },
+  "dependencies": {
+    "@better-auth/api-key": "1.7.4",
+    "@cloudflare/workers-types": "5.20260911.1",
+    "@hono/zod-validator": "^0.9.1",
+    "better-auth": "1.7.4",
+    "css-tree": "^3.2.1",
+    "dom-serializer": "^3.1.1",
+    "drizzle-orm": "^0.45.2",
+    "hono": "4.13.7",
+    "htmlparser2": "^12.0.0",
+    "postal-mime": "^3.0.0",
+    "resend": "^6.27.0",
+    "sanitize-html": "^2.17.7",
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@spinupmail/contracts": "workspace:*",
+    "@types/css-tree": "^3.2.0",
+    "@types/node": "^26.5.1",
+    "@types/sanitize-html": "^2.16.1",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "@vitest/coverage-v8": "4.1.11",
+    "drizzle-kit": "^0.31.10",
+    "fast-check": "^4.10.0",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.131.0"
+  }
+}

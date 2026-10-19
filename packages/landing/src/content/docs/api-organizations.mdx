@@ -1,0 +1,31 @@
+---
+title: Organizations API
+description: Create organizations and read user-scoped or organization-scoped inbox metrics.
+summary: Organization creation plus counts, time-series activity, and aggregate summary metrics.
+groupId: api-reference
+keywords:
+  - organizations
+  - stats
+  - email activity
+  - email summary
+---
+
+These routes cover both organization creation and dashboard reporting. Creation
+is authenticated but not organization-scoped yet. The stats route is
+user-scoped, while the activity and summary routes require organization scope.
+
+## Create organization
+
+<ApiEndpointReference specId="post-organization" />
+
+## List organization stats
+
+<ApiEndpointReference specId="get-organization-stats" />
+
+## Get email activity
+
+<ApiEndpointReference specId="get-organization-email-activity" />
+
+## Get email summary
+
+<ApiEndpointReference specId="get-organization-email-summary" />

@@ -1,0 +1,141 @@
+import { Bar, BarChart, XAxis } from "recharts";
+import NumberFlow from "@number-flow/react";
+import { Mail01Icon } from "@/lib/hugeicons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  type ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useEmailActivityQuery } from "@/features/dashboard/hooks/use-email-activity";
+import { formatDashboardDayLabel } from "@/features/timezone/lib/date-format";
+import { cn } from "@/lib/utils";
+
+const chartConfig = {
+  count: {
+    label: "Emails",
+    color: "var(--chart-1)",
+  },
+} satisfies ChartConfig;
+
+const formatTickDate = (dateStr: string) => {
+  const day = dateStr.split("-")[2] ?? "";
+  return day.replace(/^0/, "") || dateStr;
+};
+
+type ReceivedEmailsChartProps = {
+  variant?: "card" | "surface";
+};
+
+export const ReceivedEmailsChart = ({
+  variant = "card",
+}: ReceivedEmailsChartProps) => {
+  const { data: emailActivity, isLoading } = useEmailActivityQuery(14);
+  const daily = emailActivity?.daily;
+  const isSurface = variant === "surface";
+
+  const total = daily?.reduce((sum, d) => sum + d.count, 0) ?? 0;
+
+  return (
+    <Card
+      className={cn(
+        "flex min-w-0 flex-col gap-0",
+        isSurface
+          ? "rounded-none bg-transparent py-0 ring-0"
+          : "border-border/70 bg-card/60"
+      )}
+    >
+      <CardHeader
+        className={cn("space-y-0.5 pb-2 pt-3", isSurface && "px-0 pt-0")}
+      >
+        <div className="flex items-start justify-between">
+          <CardTitle className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <HugeiconsIcon
+              icon={Mail01Icon}
+              className="size-3 shrink-0"
+              strokeWidth={2}
+            />
+            <span>Received Emails</span>
+          </CardTitle>
+          <Badge
+            variant="outline"
+            className="text-[10px] font-normal text-muted-foreground"
+          >
+            Last 14 days
+          </Badge>
+        </div>
+        <p className="text-2xl font-semibold tracking-tight">
+          <NumberFlow
+            value={isLoading ? 0 : total}
+            format={{ useGrouping: true }}
+          />
+        </p>
+      </CardHeader>
+      <CardContent className={cn("mt-auto pb-0.5 pt-0", isSurface && "px-0")}>
+        {isLoading || !daily ? (
+          <div className="h-[120px] w-full overflow-visible px-1">
+            <div className="flex h-full flex-col justify-end">
+              <div className="flex h-[100px] items-end gap-1 px-3">
+                {[30, 44, 36, 52, 28, 60, 40, 48, 34, 56, 42, 50, 32, 46].map(
+                  (height, index) => (
+                    <Skeleton
+                      // Keep skeleton bars aligned to final chart footprint.
+                      key={`received-email-bar-skeleton-${index}`}
+                      className="w-full rounded-sm"
+                      style={{ height: `${height}px` }}
+                    />
+                  )
+                )}
+              </div>
+              <div className="mt-2 flex justify-between px-3">
+                {Array.from({ length: 7 }).map((_, index) => (
+                  <Skeleton
+                    key={`received-email-tick-skeleton-${index}`}
+                    className="h-2 w-3 rounded-sm"
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <ChartContainer
+            config={chartConfig}
+            className="h-[130px] w-full overflow-visible px-1"
+          >
+            <BarChart
+              data={daily}
+              margin={{ top: 4, right: 12, bottom: 0, left: 12 }}
+            >
+              <XAxis
+                dataKey="date"
+                tickLine={false}
+                axisLine={false}
+                tickFormatter={formatTickDate}
+                tick={{ fontSize: 8 }}
+                interval={0}
+                tickMargin={4}
+              />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    labelFormatter={formatDashboardDayLabel}
+                    hideIndicator
+                  />
+                }
+              />
+              <Bar
+                dataKey="count"
+                fill="var(--color-count)"
+                radius={[3, 3, 0, 0]}
+              />
+            </BarChart>
+          </ChartContainer>
+        )}
+      </CardContent>
+    </Card>
+  );
+};

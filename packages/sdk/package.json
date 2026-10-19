@@ -1,0 +1,46 @@
+{
+  "name": "spinupmail",
+  "version": "0.2.0",
+  "description": "SpinupMail TypeScript SDK for creating and reading temporary email addresses.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ridvan/spinupmail",
+    "directory": "packages/sdk"
+  },
+  "scripts": {
+    "build": "tsdown --config tsdown.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tests/tsconfig.json",
+    "test": "vitest run --config vitest.config.ts",
+    "test:package": "node ./scripts/smoke-package.mjs"
+  },
+  "dependencies": {
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.1",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "tsdown": "^0.23.0",
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
+  }
+}

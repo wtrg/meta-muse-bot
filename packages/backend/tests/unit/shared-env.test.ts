@@ -1,0 +1,398 @@
+import {
+  getApiKeyUsageRateLimitConfig,
+  getAuthAllowedEmailDomain,
+  getAuthRateLimitConfig,
+  getAllowedDomains,
+  getExtensionRedirectOrigins,
+  getForcedMailPrefix,
+  getMaxIntegrationDispatchesPerOrganizationPerDay,
+  getMaxIntegrationsPerOrganization,
+  getIntegrationQueueRetryConfig,
+  getIntegrationSecretEncryptionKey,
+  getMaxTotalAttachmentStoragePerOrganization,
+  isEmailAttachmentsEnabled,
+  getMaxAddressesPerOrganization,
+  getMaxReceivedEmailsPerAddress,
+  getMaxReceivedEmailsPerOrganization,
+  normalizeDomain,
+  parseBooleanEnv,
+  parsePositiveInteger,
+  parsePositiveNumber,
+} from "@/shared/env";
+
+describe("shared env helpers", () => {
+  it("normalizes domains by trimming and removing decorators", () => {
+    expect(normalizeDomain(" @Example.COM. ")).toBe("example.com");
+  });
+
+  it("normalizes domains with repeated decorators without regex matching", () => {
+    expect(
+      normalizeDomain(`${"@".repeat(512)}Example.COM${".".repeat(512)}`)
+    ).toBe("example.com");
+  });
+
+  it("normalizes EMAIL_DOMAINS values and deduplicates them", () => {
+    const env = {
+      EMAIL_DOMAINS: "Example.com,foo.test,@bar.io.,foo.test",
+    } as unknown as CloudflareBindings;
+
+    expect(getAllowedDomains(env)).toEqual([
+      "example.com",
+      "foo.test",
+      "bar.io",
+    ]);
+  });
+
+  it("normalizes the optional auth email domain restriction", () => {
+    expect(
+      getAuthAllowedEmailDomain({
+        AUTH_ALLOWED_EMAIL_DOMAIN: " @Example.COM. ",
+      } as CloudflareBindings)
+    ).toBe("example.com");
+    expect(getAuthAllowedEmailDomain({} as CloudflareBindings)).toBeUndefined();
+  });
+
+  it("normalizes configured extension redirect origins and removes invalid entries", () => {
+    expect(
+      getExtensionRedirectOrigins({
+        EXTENSION_REDIRECT_ORIGINS:
+          " https://abc.chromiumapp.org/path , invalid, https://abc.chromiumapp.org, https://def.extensions.allizom.org ",
+      } as CloudflareBindings)
+    ).toEqual([
+      "https://abc.chromiumapp.org",
+      "https://def.extensions.allizom.org",
+    ]);
+
+    expect(getExtensionRedirectOrigins({} as CloudflareBindings)).toEqual([]);
+  });
+
+  it("normalizes the optional forced mail prefix", () => {
+    expect(
+      getForcedMailPrefix({
+        FORCED_MAIL_PREFIX: " Temp-+ ",
+      } as CloudflareBindings)
+    ).toBe("temp");
+    expect(
+      getForcedMailPrefix({
+        FORCED_MAIL_PREFIX: " !!! ",
+      } as CloudflareBindings)
+    ).toBeUndefined();
+  });
+
+  it("uses only integration env names for integration settings", () => {
+    expect(
+      getIntegrationSecretEncryptionKey({
+        INTEGRATION_SECRET_ENCRYPTION_KEY: " integration-key ",
+      } as CloudflareBindings)
+    ).toBe("integration-key");
+
+    expect(
+      getIntegrationQueueRetryConfig({
+        INTEGRATION_QUEUE_RETRY_WINDOW_SECONDS: "120",
+        INTEGRATION_QUEUE_BASE_DELAY_SECONDS: "15",
+        INTEGRATION_QUEUE_MAX_DELAY_SECONDS: "90",
+        INTEGRATION_QUEUE_JITTER_SECONDS: "5",
+      } as CloudflareBindings)
+    ).toEqual({
+      retryWindowSeconds: 120,
+      baseDelaySeconds: 15,
+      maxDelaySeconds: 90,
+      jitterSeconds: 5,
+    });
+
+    expect(
+      getIntegrationSecretEncryptionKey({
+        INTEGRATION_SECRET_ENCRYPTION_KEY: "   ",
+      } as CloudflareBindings)
+    ).toBeUndefined();
+  });
+
+  it("parses positive numbers and rejects invalid values", () => {
+    expect(parsePositiveNumber("5")).toBe(5);
+    expect(parsePositiveNumber("0")).toBeUndefined();
+    expect(parsePositiveNumber("-1")).toBeUndefined();
+    expect(parsePositiveNumber("nope")).toBeUndefined();
+  });
+
+  it("parses positive integers and rejects non-integer values", () => {
+    expect(parsePositiveInteger("5")).toBe(5);
+    expect(parsePositiveInteger("1.5")).toBeUndefined();
+    expect(parsePositiveInteger("0")).toBeUndefined();
+    expect(parsePositiveInteger("-1")).toBeUndefined();
+    expect(parsePositiveInteger("nope")).toBeUndefined();
+  });
+
+  it("parses max addresses per organization and falls back to default", () => {
+    expect(
+      getMaxAddressesPerOrganization({
+        MAX_ADDRESSES_PER_ORGANIZATION: "250",
+      } as CloudflareBindings)
+    ).toBe(250);
+    expect(
+      getMaxAddressesPerOrganization({
+        MAX_ADDRESSES_PER_ORGANIZATION: "1.5",
+      } as CloudflareBindings)
+    ).toBe(100);
+    expect(
+      getMaxAddressesPerOrganization({
+        MAX_ADDRESSES_PER_ORGANIZATION: "0",
+      } as CloudflareBindings)
+    ).toBe(100);
+    expect(
+      getMaxAddressesPerOrganization({
+        MAX_ADDRESSES_PER_ORGANIZATION: "invalid",
+      } as CloudflareBindings)
+    ).toBe(100);
+    expect(getMaxAddressesPerOrganization({} as CloudflareBindings)).toBe(100);
+  });
+
+  it("parses max integrations per organization and falls back to default", () => {
+    expect(
+      getMaxIntegrationsPerOrganization({
+        MAX_INTEGRATIONS_PER_ORGANIZATION: "5",
+      } as CloudflareBindings)
+    ).toBe(5);
+    expect(
+      getMaxIntegrationsPerOrganization({
+        MAX_INTEGRATIONS_PER_ORGANIZATION: "1.5",
+      } as CloudflareBindings)
+    ).toBe(3);
+    expect(
+      getMaxIntegrationsPerOrganization({
+        MAX_INTEGRATIONS_PER_ORGANIZATION: "0",
+      } as CloudflareBindings)
+    ).toBe(3);
+    expect(
+      getMaxIntegrationsPerOrganization({
+        MAX_INTEGRATIONS_PER_ORGANIZATION: "invalid",
+      } as CloudflareBindings)
+    ).toBe(3);
+    expect(getMaxIntegrationsPerOrganization({} as CloudflareBindings)).toBe(3);
+  });
+
+  it("parses max integration dispatches per organization per day and falls back to default", () => {
+    expect(
+      getMaxIntegrationDispatchesPerOrganizationPerDay({
+        MAX_INTEGRATION_DISPATCHES_PER_ORGANIZATION_PER_DAY: "250",
+      } as CloudflareBindings)
+    ).toBe(250);
+    expect(
+      getMaxIntegrationDispatchesPerOrganizationPerDay({
+        MAX_INTEGRATION_DISPATCHES_PER_ORGANIZATION_PER_DAY: "1.5",
+      } as CloudflareBindings)
+    ).toBe(100);
+    expect(
+      getMaxIntegrationDispatchesPerOrganizationPerDay({
+        MAX_INTEGRATION_DISPATCHES_PER_ORGANIZATION_PER_DAY: "0",
+      } as CloudflareBindings)
+    ).toBe(100);
+    expect(
+      getMaxIntegrationDispatchesPerOrganizationPerDay({
+        MAX_INTEGRATION_DISPATCHES_PER_ORGANIZATION_PER_DAY: "invalid",
+      } as CloudflareBindings)
+    ).toBe(100);
+    expect(
+      getMaxIntegrationDispatchesPerOrganizationPerDay({} as CloudflareBindings)
+    ).toBe(100);
+  });
+
+  it("parses max total attachment storage per organization and falls back to default", () => {
+    expect(
+      getMaxTotalAttachmentStoragePerOrganization({
+        EMAIL_ATTACHMENT_MAX_TOTAL_BYTES_PER_ORGANIZATION: "209715200",
+      } as CloudflareBindings)
+    ).toBe(209715200);
+    expect(
+      getMaxTotalAttachmentStoragePerOrganization({
+        EMAIL_ATTACHMENT_MAX_TOTAL_BYTES_PER_ORGANIZATION: "1.5",
+      } as CloudflareBindings)
+    ).toBe(104857600);
+    expect(
+      getMaxTotalAttachmentStoragePerOrganization({
+        EMAIL_ATTACHMENT_MAX_TOTAL_BYTES_PER_ORGANIZATION: "0",
+      } as CloudflareBindings)
+    ).toBe(104857600);
+    expect(
+      getMaxTotalAttachmentStoragePerOrganization({
+        EMAIL_ATTACHMENT_MAX_TOTAL_BYTES_PER_ORGANIZATION: "invalid",
+      } as CloudflareBindings)
+    ).toBe(104857600);
+    expect(
+      getMaxTotalAttachmentStoragePerOrganization({} as CloudflareBindings)
+    ).toBe(104857600);
+  });
+
+  it("parses max received emails per organization and falls back to default", () => {
+    expect(
+      getMaxReceivedEmailsPerOrganization({
+        MAX_RECEIVED_EMAILS_PER_ORGANIZATION: "2500",
+      } as CloudflareBindings)
+    ).toBe(2500);
+    expect(
+      getMaxReceivedEmailsPerOrganization({
+        MAX_RECEIVED_EMAILS_PER_ORGANIZATION: "1.5",
+      } as CloudflareBindings)
+    ).toBe(1000);
+    expect(
+      getMaxReceivedEmailsPerOrganization({
+        MAX_RECEIVED_EMAILS_PER_ORGANIZATION: "0",
+      } as CloudflareBindings)
+    ).toBe(1000);
+    expect(
+      getMaxReceivedEmailsPerOrganization({
+        MAX_RECEIVED_EMAILS_PER_ORGANIZATION: "invalid",
+      } as CloudflareBindings)
+    ).toBe(1000);
+    expect(getMaxReceivedEmailsPerOrganization({} as CloudflareBindings)).toBe(
+      1000
+    );
+  });
+
+  it("parses max received emails per address and falls back to default", () => {
+    expect(
+      getMaxReceivedEmailsPerAddress({
+        MAX_RECEIVED_EMAILS_PER_ADDRESS: "250",
+      } as CloudflareBindings)
+    ).toBe(250);
+    expect(
+      getMaxReceivedEmailsPerAddress({
+        MAX_RECEIVED_EMAILS_PER_ADDRESS: "1.5",
+      } as CloudflareBindings)
+    ).toBe(100);
+    expect(
+      getMaxReceivedEmailsPerAddress({
+        MAX_RECEIVED_EMAILS_PER_ADDRESS: "0",
+      } as CloudflareBindings)
+    ).toBe(100);
+    expect(
+      getMaxReceivedEmailsPerAddress({
+        MAX_RECEIVED_EMAILS_PER_ADDRESS: "invalid",
+      } as CloudflareBindings)
+    ).toBe(100);
+    expect(getMaxReceivedEmailsPerAddress({} as CloudflareBindings)).toBe(100);
+  });
+
+  it("parses boolean-like env values with fallback", () => {
+    expect(parseBooleanEnv("true", false)).toBe(true);
+    expect(parseBooleanEnv("ON", false)).toBe(true);
+    expect(parseBooleanEnv("0", true)).toBe(false);
+    expect(parseBooleanEnv("no", true)).toBe(false);
+    expect(parseBooleanEnv("invalid", true)).toBe(true);
+    expect(parseBooleanEnv(undefined, false)).toBe(false);
+  });
+
+  it("enables attachments by default and supports opt-out env values", () => {
+    const originalValue = process.env.EMAIL_ATTACHMENTS_ENABLED;
+
+    try {
+      delete process.env.EMAIL_ATTACHMENTS_ENABLED;
+
+      expect(isEmailAttachmentsEnabled({} as CloudflareBindings)).toBe(true);
+      expect(
+        isEmailAttachmentsEnabled({
+          EMAIL_ATTACHMENTS_ENABLED: "false",
+        } as CloudflareBindings)
+      ).toBe(false);
+      expect(
+        isEmailAttachmentsEnabled({
+          EMAIL_ATTACHMENTS_ENABLED: "0",
+        } as CloudflareBindings)
+      ).toBe(false);
+    } finally {
+      if (originalValue === undefined) {
+        delete process.env.EMAIL_ATTACHMENTS_ENABLED;
+      } else {
+        process.env.EMAIL_ATTACHMENTS_ENABLED = originalValue;
+      }
+    }
+  });
+
+  it("parses Better Auth rate limit env overrides and preserves defaults", () => {
+    expect(
+      getAuthRateLimitConfig({
+        AUTH_RATE_LIMIT_WINDOW: "120",
+        AUTH_RATE_LIMIT_MAX: "25",
+        AUTH_CHANGE_EMAIL_RATE_LIMIT_WINDOW: "7200",
+        AUTH_CHANGE_EMAIL_RATE_LIMIT_MAX: "5",
+      } as CloudflareBindings)
+    ).toEqual({
+      window: 120,
+      max: 25,
+      changeEmail: {
+        window: 7200,
+        max: 5,
+      },
+    });
+
+    expect(
+      getAuthRateLimitConfig({
+        AUTH_RATE_LIMIT_WINDOW: "invalid",
+        AUTH_RATE_LIMIT_MAX: "1.5",
+        AUTH_CHANGE_EMAIL_RATE_LIMIT_WINDOW: "0",
+        AUTH_CHANGE_EMAIL_RATE_LIMIT_MAX: "-1",
+      } as CloudflareBindings)
+    ).toEqual({
+      window: 60,
+      max: undefined,
+      changeEmail: {
+        window: 3600,
+        max: 2,
+      },
+    });
+  });
+
+  it("preserves positive Better Auth rate limit windows", () => {
+    expect(
+      getAuthRateLimitConfig({
+        AUTH_RATE_LIMIT_WINDOW: "10",
+        AUTH_CHANGE_EMAIL_RATE_LIMIT_WINDOW: "30",
+      } as CloudflareBindings)
+    ).toEqual({
+      window: 10,
+      max: undefined,
+      changeEmail: {
+        window: 30,
+        max: 2,
+      },
+    });
+  });
+
+  it("parses API key usage rate limit env overrides and preserves defaults", () => {
+    expect(
+      getApiKeyUsageRateLimitConfig({
+        API_KEY_RATE_LIMIT_WINDOW: "60",
+        API_KEY_RATE_LIMIT_MAX: "120",
+      } as CloudflareBindings)
+    ).toEqual({
+      window: 60,
+      max: 120,
+    });
+
+    expect(
+      getApiKeyUsageRateLimitConfig({
+        API_KEY_RATE_LIMIT_WINDOW: "invalid",
+        API_KEY_RATE_LIMIT_MAX: "120",
+      } as CloudflareBindings)
+    ).toEqual({
+      window: 60,
+      max: 120,
+    });
+
+    expect(getApiKeyUsageRateLimitConfig({} as CloudflareBindings)).toEqual({
+      window: 60,
+      max: 120,
+    });
+  });
+
+  it("preserves positive API key rate limit windows", () => {
+    expect(
+      getApiKeyUsageRateLimitConfig({
+        API_KEY_RATE_LIMIT_WINDOW: "10",
+        API_KEY_RATE_LIMIT_MAX: "120",
+      } as CloudflareBindings)
+    ).toEqual({
+      window: 10,
+      max: 120,
+    });
+  });
+});

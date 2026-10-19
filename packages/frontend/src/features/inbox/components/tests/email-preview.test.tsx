@@ -1,0 +1,347 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+import { EmailPreview } from "@/features/inbox/components/email-preview";
+import { useAuth } from "@/features/auth/hooks/use-auth";
+import { useDeleteEmailMutation } from "@/features/inbox/hooks/use-inbox";
+import { useTimezone } from "@/features/timezone/hooks/use-timezone";
+
+vi.mock("@/features/auth/hooks/use-auth", () => ({
+  useAuth: vi.fn(),
+}));
+
+vi.mock("@/features/inbox/hooks/use-inbox", () => ({
+  useDeleteEmailMutation: vi.fn(),
+}));
+
+vi.mock("@/features/timezone/hooks/use-timezone", () => ({
+  useTimezone: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    promise: vi.fn(),
+  },
+}));
+
+const mockedUseAuth = vi.mocked(useAuth);
+const mockedUseDeleteEmailMutation = vi.mocked(useDeleteEmailMutation);
+const mockedUseTimezone = vi.mocked(useTimezone);
+const mockedToastPromise = vi.mocked(toast.promise);
+
+const resolveToastPromise = <T,>(
+  promise: Parameters<typeof toast.promise>[0]
+): Promise<T> => {
+  if (typeof promise === "function") {
+    return promise() as Promise<T>;
+  }
+
+  return promise as Promise<T>;
+};
+
+describe("EmailPreview", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    mockedUseAuth.mockReturnValue({
+      activeOrganizationId: "org-1",
+    } as unknown as ReturnType<typeof useAuth>);
+
+    mockedUseTimezone.mockReturnValue({
+      effectiveTimeZone: "UTC",
+    } as unknown as ReturnType<typeof useTimezone>);
+
+    mockedToastPromise.mockImplementation(
+      ((promise: Parameters<typeof toast.promise>[0]) =>
+        ({
+          unwrap: () => resolveToastPromise(promise),
+        }) as ReturnType<typeof toast.promise>) as typeof toast.promise
+    );
+
+    mockedUseDeleteEmailMutation.mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+      error: null,
+    } as unknown as ReturnType<typeof useDeleteEmailMutation>);
+  });
+
+  it("shows a load remote content action and reloads the renderer after opt-in", async () => {
+    render(
+      <EmailPreview
+        email={{
+          id: "email-1",
+          addressId: "address-1",
+          to: "inbox@example.com",
+          from: "sender@example.com",
+          sender: "John Smith <sender@example.com>",
+          senderLabel: "John Smith",
+          subject: "Remote content",
+          headers: [],
+          html: '<img src="https://example.com/pixel.png" />',
+          text: null,
+          raw: null,
+          rawSize: 10,
+          rawTruncated: false,
+          isSample: false,
+          rawDownloadPath: undefined,
+          attachments: [],
+          receivedAt: "2026-03-09T00:00:00.000Z",
+          receivedAtMs: 1741478400000,
+        }}
+      />
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Load remote content" })
+      ).toBeTruthy()
+    );
+
+    const host = screen.getByTestId("email-html-renderer");
+    expect(
+      host.shadowRoot?.querySelector("img")?.getAttribute("src")
+    ).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Load remote content" })
+    );
+
+    await waitFor(() =>
+      expect(host.shadowRoot?.querySelector("img")?.getAttribute("src")).toBe(
+        "https://example.com/pixel.png"
+      )
+    );
+  });
+
+  it("falls back to plain text when HTML is unavailable", () => {
+    render(
+      <EmailPreview
+        email={{
+          id: "email-2",
+          addressId: "address-1",
+          to: "inbox@example.com",
+          from: "sender@example.com",
+          sender: "John Smith <sender@example.com>",
+          senderLabel: "John Smith",
+          subject: "Text only",
+          headers: [],
+          html: null,
+          text: "Hello from plain text",
+          raw: null,
+          rawSize: 10,
+          rawTruncated: false,
+          isSample: false,
+          rawDownloadPath: undefined,
+          attachments: [],
+          receivedAt: "2026-03-09T00:00:00.000Z",
+          receivedAtMs: 1741478400000,
+        }}
+      />
+    );
+
+    expect(screen.getByDisplayValue("Hello from plain text")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Load remote content" })
+    ).toBeNull();
+  });
+
+  it("renders sender separately from the actual from value", () => {
+    render(
+      <EmailPreview
+        email={{
+          id: "email-3",
+          addressId: "address-1",
+          to: "inbox@example.com",
+          from: "sender@example.com",
+          sender: "John Smith <sender@example.com>",
+          senderLabel: "John Smith",
+          subject: "Sender details",
+          headers: [],
+          html: null,
+          text: "Hello",
+          raw: null,
+          rawSize: 10,
+          rawTruncated: false,
+          isSample: false,
+          rawDownloadPath: undefined,
+          attachments: [],
+          receivedAt: "2026-03-09T00:00:00.000Z",
+          receivedAtMs: 1741478400000,
+        }}
+      />
+    );
+
+    expect(
+      screen.getByText("Sender: John Smith <sender@example.com>")
+    ).toBeTruthy();
+    expect(screen.getByText("From: sender@example.com")).toBeTruthy();
+  });
+
+  it("shows an icon-only delete button", () => {
+    render(
+      <EmailPreview
+        email={{
+          id: "email-4",
+          addressId: "address-1",
+          to: "inbox@example.com",
+          from: "sender@example.com",
+          sender: "John Smith <sender@example.com>",
+          senderLabel: "John Smith",
+          subject: "Delete action",
+          headers: [],
+          html: null,
+          text: "Hello",
+          raw: null,
+          rawSize: 10,
+          rawTruncated: false,
+          isSample: false,
+          rawDownloadPath: undefined,
+          attachments: [],
+          receivedAt: "2026-03-09T00:00:00.000Z",
+          receivedAtMs: 1741478400000,
+        }}
+      />
+    );
+
+    const deleteButton = screen.getByRole("button", { name: "Delete" });
+    expect(screen.queryByText(/^Delete$/)).toBeNull();
+    expect(deleteButton).toBeTruthy();
+  });
+
+  it("shows a promise toast after confirming email deletion", async () => {
+    const deleteMutateAsync = vi.fn().mockResolvedValue({
+      deleted: true,
+      id: "email-4",
+    });
+    mockedUseDeleteEmailMutation.mockReturnValue({
+      mutateAsync: deleteMutateAsync,
+      isPending: false,
+      error: null,
+    } as unknown as ReturnType<typeof useDeleteEmailMutation>);
+
+    render(
+      <EmailPreview
+        email={{
+          id: "email-4",
+          addressId: "address-1",
+          to: "inbox@example.com",
+          from: "sender@example.com",
+          sender: "John Smith <sender@example.com>",
+          senderLabel: "John Smith",
+          subject: "Delete action",
+          headers: [],
+          html: null,
+          text: "Hello",
+          raw: null,
+          rawSize: 10,
+          rawTruncated: false,
+          isSample: false,
+          rawDownloadPath: undefined,
+          attachments: [],
+          receivedAt: "2026-03-09T00:00:00.000Z",
+          receivedAtMs: 1741478400000,
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(deleteMutateAsync).toHaveBeenCalledWith("email-4")
+    );
+    expect(mockedToastPromise).toHaveBeenCalledWith(
+      expect.any(Promise),
+      expect.objectContaining({
+        loading: "Deleting email...",
+        success: "Email deleted.",
+        error: expect.any(Function),
+      })
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Delete this email?")).toBeNull()
+    );
+  });
+
+  it("lets the html renderer fill remaining height while keeping attachments visible", () => {
+    render(
+      <div className="flex h-[640px] flex-col">
+        <EmailPreview
+          email={{
+            id: "email-5",
+            addressId: "address-1",
+            to: "inbox@example.com",
+            from: "sender@example.com",
+            sender: "John Smith <sender@example.com>",
+            senderLabel: "John Smith",
+            subject: "Attachments",
+            headers: [],
+            html: "<p>Hello</p>",
+            text: null,
+            raw: null,
+            rawSize: 10,
+            rawTruncated: false,
+            isSample: false,
+            rawDownloadPath: undefined,
+            attachments: [
+              {
+                id: "attachment-1",
+                filename: "report.pdf",
+                contentType: "application/pdf",
+                size: 1024,
+                disposition: "attachment",
+                contentId: null,
+                inlinePath:
+                  "/api/emails/email-5/attachments/attachment-1?inline=1",
+                downloadPath: "/api/emails/email-5/attachments/attachment-1",
+              },
+            ],
+            receivedAt: "2026-03-09T00:00:00.000Z",
+            receivedAtMs: 1741478400000,
+          }}
+        />
+      </div>
+    );
+
+    expect(screen.getByText("Attachments (1)")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("email-html-renderer")
+        .parentElement?.className.includes("flex-1")
+    ).toBe(true);
+    expect(
+      screen
+        .getByTestId("email-html-renderer")
+        .parentElement?.className.includes("min-h-0")
+    ).toBe(true);
+  });
+
+  it("shows a sample badge for starter inbox emails", () => {
+    render(
+      <EmailPreview
+        email={{
+          id: "email-sample",
+          addressId: "address-1",
+          to: "inbox@example.com",
+          from: "sender@example.com",
+          sender: "Spinupmail Team <sender@example.com>",
+          senderLabel: "Spinupmail Team",
+          subject: "Welcome",
+          headers: [],
+          html: null,
+          text: "Hello",
+          raw: null,
+          rawSize: 10,
+          rawTruncated: false,
+          isSample: true,
+          rawDownloadPath: undefined,
+          attachments: [],
+          receivedAt: "2026-03-09T00:00:00.000Z",
+          receivedAtMs: 1741478400000,
+        }}
+      />
+    );
+
+    expect(screen.getByText("Sample")).toBeTruthy();
+  });
+});

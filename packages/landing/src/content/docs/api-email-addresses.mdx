@@ -1,0 +1,83 @@
+---
+title: Email Addresses API
+description: Create, list, update, and delete inboxes with TTL, sender policy, retention controls, and integration subscriptions.
+summary: Exhaustive reference for inbox lifecycle operations, including integration-enabled inbox subscriptions.
+groupId: api-reference
+keywords:
+  - email addresses
+  - allowedFromDomains
+  - maxReceivedEmailCount
+  - ttl
+  - inbox policy
+---
+
+The address API is where most automation starts. It lets you provision an
+inbox, constrain who can send to it, limit how long it lives, and clean it up
+when the workflow ends.
+
+If the Worker is configured with `FORCED_MAIL_PREFIX`, create and rename
+operations always apply that prefix on the backend before the final address is
+validated and stored.
+
+Email retention is controlled by two limits:
+
+- `/api/domains` returns `maxReceivedEmailsPerAddress` and
+  `maxReceivedEmailsPerOrganization` so clients can mirror the active limits.
+- Address create and update requests still use `maxReceivedEmailCount` and
+  `maxReceivedEmailAction` for the per-inbox policy stored in metadata.
+- The effective inbox retention limit is capped by the current
+  `maxReceivedEmailsPerAddress` value, and inbound storage is also bounded by
+  the organization-wide `maxReceivedEmailsPerOrganization` total.
+
+Address endpoints also expose integration-linked fields:
+
+- `integrationSubscriptions` can be provided on create and update requests.
+- `integrations` is returned on address list/detail/create/update responses.
+
+## Integration subscriptions
+
+Spinupmail integrations let you route inbox events to external providers.
+Telegram is currently available, and each address can subscribe to integration
+events through `integrationSubscriptions`.
+
+Use this when you want workflow inboxes (for sign-up tests, operations, or QA)
+to notify your team in real time without polling the dashboard.
+
+```json
+{
+  "localPart": "alerts",
+  "integrationSubscriptions": [
+    {
+      "integrationId": "int_telegram_123",
+      "eventType": "email.received"
+    }
+  ]
+}
+```
+
+For provider setup, delivery behavior, and troubleshooting, see
+[Integrations](/docs/integrations).
+
+## List email addresses
+
+<ApiEndpointReference specId="get-email-addresses" />
+
+## List recent address activity
+
+<ApiEndpointReference specId="get-recent-address-activity" />
+
+## Create an email address
+
+<ApiEndpointReference specId="post-email-address" />
+
+## Get an email address
+
+<ApiEndpointReference specId="get-email-address-detail" />
+
+## Update an email address
+
+<ApiEndpointReference specId="patch-email-address" />
+
+## Delete an email address
+
+<ApiEndpointReference specId="delete-email-address" />
