@@ -27,13 +27,14 @@ import {
   AlertTriangle,
   CheckCircle2,
   XCircle,
-  Activity
+  Activity,
+  Info
 } from "lucide-react";
 
 type ProxyHealth = {
   ok: boolean;
   is_us?: boolean;
-  verdict?: "US_RESIDENTIAL" | "US_DATACENTER" | "NON_US";
+  verdict?: "US_RESIDENTIAL" | "US_DATACENTER" | "CA_ROUTE" | "NON_US" | string;
   verdict_text?: string;
   error?: string;
   data?: {
@@ -98,7 +99,7 @@ export const MuseBotPage = () => {
   const [proxyType, setProxyType] = React.useState<"psiphon" | "vpn" | "custom" | "auto" | "windscribe">("psiphon");
   const [customProxy, setCustomProxy] = React.useState("");
   const [activeProxyInfo, setActiveProxyInfo] = React.useState<{ proxy: string; isp: string; region: string } | null>(null);
-  const [inviteCode, setInviteCode] = React.useState("QKPLQ6");
+  const [inviteCode, setInviteCode] = React.useState("");
   const [isScanningProxy, setIsScanningProxy] = React.useState(false);
   const [psiphonStatus, setPsiphonStatus] = React.useState<{ running: boolean; info?: any } | null>(null);
   const [isTogglingPsiphon, setIsTogglingPsiphon] = React.useState(false);
@@ -595,13 +596,7 @@ export const MuseBotPage = () => {
                     </div>
                   </div>
 
-                  <div className="space-y-2 border-t border-border/50 pt-3">
-                    <Button type="button" variant={proxyType === "windscribe" ? "secondary" : "outline"}
-                      disabled={isRunning} onClick={() => setProxyType("windscribe")} className="w-full">
-                      Windscribe Free · Tự kết nối bằng CLI
-                    </Button>
-                    {proxyType === "windscribe" && <p className="text-xs text-muted-foreground">Tool dùng tài khoản Free đã đăng nhập trong ứng dụng Windows. Không mua gói, không nâng cấp. Nếu CLI báo lỗi, đăng ký Muse sẽ dừng.</p>}
-                  </div>
+
 
                   {/* Email Provider */}
                   <div className="space-y-2 pt-1 border-t border-border/50">
@@ -628,10 +623,10 @@ export const MuseBotPage = () => {
                       >
                         <div className="font-semibold text-xs flex items-center gap-1 text-violet-600 dark:text-violet-400">
                           <Sparkles className="size-3.5 shrink-0" />
-                          Clean TempMail
+                          Clean Domain (fraudfindez.com)
                         </div>
                         <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight">
-                          Domain sạch vượt MX blacklist của Meta (Khuyên dùng)
+                          Tên miền sạch chuẩn Meta (loại bỏ hoàn toàn mtempmail)
                         </div>
                       </button>
 
@@ -663,7 +658,7 @@ export const MuseBotPage = () => {
                       Cơ chế Fake VPN / Vị trí địa lý (Geo-Spoofing)
                     </Label>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
                       <button
                         type="button"
                         onClick={() => setProxyType("psiphon")}
@@ -683,6 +678,25 @@ export const MuseBotPage = () => {
                         </div>
                         <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight">
                           Tự động 100% ngầm
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setProxyType("windscribe")}
+                        disabled={isRunning}
+                        className={`p-2.5 rounded-lg border text-left transition-all ${
+                          proxyType === "windscribe"
+                            ? "border-sky-500 bg-sky-500/10 text-foreground ring-1 ring-sky-500"
+                            : "border-border/60 hover:bg-muted/40 text-muted-foreground"
+                        }`}
+                      >
+                        <div className="font-semibold text-xs flex items-center gap-1 text-sky-600 dark:text-sky-400">
+                          <ShieldCheck className="size-3.5 shrink-0" />
+                          Windscribe CLI
+                        </div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight">
+                          Tài khoản Free máy
                         </div>
                       </button>
 
@@ -743,6 +757,20 @@ export const MuseBotPage = () => {
                         </div>
                       </button>
                     </div>
+
+                    {proxyType === "windscribe" && (
+                      <div className="p-3 rounded-lg border border-sky-500/30 bg-sky-500/5 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-sky-700 dark:text-sky-300 flex items-center gap-1.5">
+                            <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
+                            Windscribe CLI Tự Động Kết Nối (Gói Free)
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground leading-relaxed">
+                          Tool sẽ tự động kết nối máy chủ US qua ứng dụng Windscribe trên máy tính của bạn trước khi tạo tài khoản.
+                        </p>
+                      </div>
+                    )}
 
                     {proxyType === "psiphon" && (
                       <div className="p-3 rounded-lg border border-violet-500/30 bg-violet-500/5 space-y-2.5">
@@ -884,20 +912,34 @@ export const MuseBotPage = () => {
 
                       {proxyHealth ? (
                         <div className={`p-2.5 rounded-lg border text-xs space-y-1.5 ${
-                          proxyHealth.verdict === "US_RESIDENTIAL"
+                          !proxyHealth.ok
+                            ? "bg-destructive/10 border-destructive/30 text-destructive dark:text-red-300"
+                            : (proxyHealth.verdict === "US_RESIDENTIAL" || proxyHealth.verdict === "US_ROUTE")
                             ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-950 dark:text-emerald-100"
                             : proxyHealth.verdict === "US_DATACENTER"
                             ? "bg-amber-500/10 border-amber-500/30 text-amber-950 dark:text-amber-100"
+                            : proxyHealth.verdict === "CA_ROUTE"
+                            ? "bg-blue-500/10 border-blue-500/30 text-blue-950 dark:text-blue-100"
                             : "bg-destructive/10 border-destructive/30 text-destructive dark:text-red-300"
                         }`}>
                           <div className="flex items-center gap-2 font-bold">
-                            {proxyHealth.verdict === "US_RESIDENTIAL" && <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />}
-                            {proxyHealth.verdict === "US_DATACENTER" && <AlertTriangle className="size-4 text-amber-500 shrink-0" />}
-                            {proxyHealth.verdict === "NON_US" && <XCircle className="size-4 text-destructive shrink-0" />}
-                            <span>{proxyHealth.verdict_text}</span>
+                            {!proxyHealth.ok ? (
+                              <>
+                                <XCircle className="size-4 text-destructive shrink-0" />
+                                <span>{proxyHealth.error || "Không thể kiểm tra proxy"}</span>
+                              </>
+                            ) : (
+                              <>
+                                {(proxyHealth.verdict === "US_RESIDENTIAL" || proxyHealth.verdict === "US_ROUTE") && <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />}
+                                {proxyHealth.verdict === "US_DATACENTER" && <AlertTriangle className="size-4 text-amber-500 shrink-0" />}
+                                {proxyHealth.verdict === "CA_ROUTE" && <Info className="size-4 text-blue-500 shrink-0" />}
+                                {proxyHealth.verdict === "NON_US" && <XCircle className="size-4 text-destructive shrink-0" />}
+                                <span>{proxyHealth.verdict_text}</span>
+                              </>
+                            )}
                           </div>
 
-                          {proxyHealth.data && (
+                          {proxyHealth.ok && proxyHealth.data && (
                             <div className="grid grid-cols-2 gap-x-2 gap-y-1 pt-1 border-t border-border/40 font-mono text-[11px] text-muted-foreground">
                               <div>IP: <span className="text-foreground font-semibold">{proxyHealth.data.query}</span></div>
                               <div>Vùng: <span className="text-foreground">{proxyHealth.data.city}, {proxyHealth.data.countryCode}</span></div>
@@ -927,33 +969,35 @@ export const MuseBotPage = () => {
                         Mã Mời Meta Muse (Invite Code / Link Mời)
                       </Label>
                       <Badge variant="outline" className="text-[10px] bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/30">
-                        Mã giới thiệu
+                        Mã giới thiệu (tùy chọn)
                       </Badge>
                     </div>
 
                     <div className="flex gap-2">
                       <Input
-                        placeholder="QKPLQ6"
+                        placeholder="Nhập mã 6 ký tự hoặc link https://muse.ai/invite/..."
                         value={inviteCode}
-                        onChange={e => setInviteCode(e.target.value.trim().toUpperCase())}
+                        onChange={e => setInviteCode(e.target.value)}
                         disabled={isRunning}
-                        className="font-mono font-bold text-sm uppercase tracking-wider"
+                        className="font-mono font-medium text-sm tracking-wider"
                       />
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setInviteCode("QKPLQ6")}
-                        disabled={isRunning}
-                        className="text-xs h-9 shrink-0 font-medium"
-                        title="Khôi phục mã mời mặc định QKPLQ6"
-                      >
-                        Mặc định (QKPLQ6)
-                      </Button>
+                      {inviteCode && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setInviteCode("")}
+                          disabled={isRunning}
+                          className="text-xs h-9 shrink-0"
+                          title="Xóa mã mời"
+                        >
+                          Xóa
+                        </Button>
+                      )}
                     </div>
 
                     <p className="text-[11px] text-muted-foreground leading-relaxed">
-                      🎯 <strong>Cơ chế tự động:</strong> Tự động khởi tạo phiên với <code>https://muse.ai/?return_to=/invite/{inviteCode || "QKPLQ6"}</code> và kích hoạt mã mời trực tiếp qua hệ thống xác thực <code>NativeAuthCodeBoxes</code> nếu tài khoản đủ điều kiện. Mã mời không bảo đảm quyền truy cập chat.
+                      🎯 <strong>Quy đổi mã:</strong> Mã mời (nếu có) chỉ được gửi quy đổi trong Cài đặt sau khi tài khoản vào màn hình Chat thành công. Để trống nếu không dùng mã.
                     </p>
                   </div>
 
@@ -1231,7 +1275,7 @@ export const MuseBotPage = () => {
                       <tbody className="divide-y divide-border/60">
                         {accounts.map((acc, idx) => {
                           const pin = acc.otp || acc.pin || "";
-                          const clientOtpUrl = `${tunnelUrl}/otp?email=${encodeURIComponent(acc.email)}&pin=${encodeURIComponent(pin)}`;
+                          const clientOtpUrl = `${tunnelUrl}/otp?email=${encodeURIComponent(acc.email)}`;
                           return (
                             <tr key={acc.id} className="hover:bg-muted/30 transition-colors">
                               <td className="py-2.5 px-3 text-muted-foreground">{idx + 1}</td>

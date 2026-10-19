@@ -9,11 +9,12 @@ import subprocess
 import urllib.request
 import urllib.parse
 import re
+import ipaddress
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from playwright.async_api import async_playwright
 from muse_browser import open_muse_browser
 from muse_access import inspect_muse_access, MuseAccessError
@@ -65,39 +66,73 @@ def check_route_ip(proxy_str: Optional[str] = None) -> Dict[str, Any]:
     cmd = ["curl.exe", "-s", "--max-time", "8"]
     if norm:
         cmd.extend(["-x", norm])
-    cmd.append("http://ip-api.com/json/?fields=status,message,country,countryCode,regionName,city,zip,isp,org,as,mobile,proxy,hosting,query")
+    cmd.append("https://ipwho.is/")
     
     start_t = time.time()
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         dur = round(time.time() - start_t, 2)
-        if proc.returncode == 0 and proc.stdout.strip():
-            data = json.loads(proc.stdout.strip())
-            data["ping"] = dur
-            country_code = data.get("countryCode", "").upper()
-            is_us = country_code in ["US", "CA"]
-            is_hosting = data.get("hosting", False)
-            is_proxy = data.get("proxy", False)
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return {"ok": False, "error": f"Không thể kết nối qua proxy: {proc.stderr.strip() or 'Timeout/Connection error'}"}
             
-            if not is_us:
-                verdict = "NON_US"
-                verdict_text = f"❌ Địa chỉ IP thuộc {data.get('country')} ({country_code}). Meta Muse CHẶN VÙNG VÀ BẮT BUỘC WAITLIST!"
-            elif is_hosting or is_proxy:
+        try:
+            data = json.loads(proc.stdout.strip())
+        except Exception as json_err:
+            return {"ok": False, "error": f"Dữ liệu phản hồi tuyến mạng không đúng định dạng JSON: {json_err}"}
+            
+        if data.get("status") == "fail" or data.get("success") is False:
+            return {"ok": False, "error": f"Kiểm tra tuyến mạng thất bại: {data.get('message', 'Upstream query failed')}"}
+            
+        country_code = (data.get("country_code") or data.get("countryCode") or "").upper()
+        ip_query = data.get("ip") or data.get("query")
+        if not ip_query:
+            return {"ok": False, "error": "Dữ liệu phản hồi thiếu thông tin địa chỉ IP."}
+            
+        try:
+            ipaddress.ip_address(ip_query)
+        except Exception:
+            return {"ok": False, "error": f"Địa chỉ IP không hợp lệ: {ip_query}"}
+            
+        if not country_code or len(country_code) != 2 or not country_code.isalpha():
+            return {"ok": False, "error": f"Dữ liệu phản hồi thiếu thông tin quốc gia hoặc mã quốc gia không hợp lệ: {country_code}"}
+
+            
+        data["ping"] = dur
+        data["query"] = ip_query
+        data["countryCode"] = country_code
+        is_us = (country_code == "US")
+        is_ca = (country_code == "CA")
+        
+        has_asn = "hosting" in data or "proxy" in data
+        is_hosting = data.get("hosting", False)
+        is_proxy = data.get("proxy", False)
+        
+        if is_us:
+            if is_hosting or is_proxy:
                 verdict = "US_DATACENTER"
-                verdict_text = f"⚠️ IP Hoa Kỳ ({data.get('isp')}) nhưng là Datacenter/Proxy ASN. Rủi ro bị Meta đưa vào Danh Sách Chờ!"
-            else:
+                verdict_text = f"⚠️ IP Hoa Kỳ ({data.get('isp', 'Unknown')}) nhưng là Datacenter/Proxy ASN. Rủi ro bị Meta đưa vào Danh Sách Chờ!"
+            elif has_asn and (data.get("hosting") is False and data.get("proxy") is False):
                 verdict = "US_RESIDENTIAL"
-                verdict_text = f"✅ IP Mỹ/Canada ({data.get('isp')}, {data.get('city')}). Chưa xác minh quyền truy cập Muse."
-                
-            return {
-                "ok": True,
-                "data": data,
-                "is_us": is_us,
-                "verdict": verdict,
-                "verdict_text": verdict_text
-            }
+                verdict_text = f"✅ IP Hoa Kỳ ({data.get('isp', 'Unknown')}, {data.get('city', '')}). Residential ASN."
+            else:
+                verdict = "US_ROUTE"
+                verdict_text = f"ℹ️ IP Hoa Kỳ ({data.get('isp', 'Unknown')}, {data.get('city', '')}). Tuyến mạng US (chưa xác định loại ASN)."
+        elif is_ca:
+            verdict = "CA_ROUTE"
+            verdict_text = f"ℹ️ IP Canada ({data.get('isp', 'Unknown')}, {data.get('city', '')}). Vùng Canada tách biệt với US."
         else:
-            return {"ok": False, "error": f"Không thể kết nối qua proxy: {proc.stderr or 'Timeout/Connection error'}"}
+            verdict = "NON_US"
+            verdict_text = f"❌ Địa chỉ IP thuộc {data.get('country', country_code)} ({country_code}). Meta Muse có thể hạn chế quyền truy cập!"
+            
+        return {
+            "ok": True,
+            "data": data,
+            "is_us": is_us,
+            "is_ca": is_ca,
+            "country_code": country_code,
+            "verdict": verdict,
+            "verdict_text": verdict_text
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -129,12 +164,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+ALLOWED_BOT_HOSTS = {"127.0.0.1", "localhost", "::1"}
+TRUSTED_ORIGINS = {"http://127.0.0.1:5173", "http://localhost:5173"}
+
+def extract_host(host_header: str) -> str:
+    host_header = (host_header or "").strip()
+    if host_header.startswith("["):
+        bracket_end = host_header.find("]")
+        if bracket_end != -1:
+            return host_header[1:bracket_end].lower()
+    return host_header.split(":")[0].strip().lower()
+
 @app.middleware("http")
-async def local_bot_origin_guard(request, call_next):
+async def local_bot_security_guard(request, call_next):
     if request.url.path.startswith("/api/bot"):
+        # 1. Host header validation
+        host_header = request.headers.get("host", "")
+        host_name = extract_host(host_header)
+        if not host_name or host_name not in ALLOWED_BOT_HOSTS:
+            return JSONResponse({"detail": "Host header is not allowed for local bot controls."}, status_code=403)
+
+        # 2. Strict Origin enforcement: only exact trusted origins allowed
         origin = request.headers.get("origin")
-        if origin and urllib.parse.urlparse(origin).hostname not in ("127.0.0.1", "localhost", "::1"):
-            return JSONResponse({"detail": "Bot controls are local-only."}, status_code=403)
+        if origin:
+            clean_origin = origin.rstrip("/")
+            if clean_origin not in TRUSTED_ORIGINS:
+                return JSONResponse({"detail": "Untrusted origin for local-only bot controls."}, status_code=403)
     return await call_next(request)
 
 
@@ -211,7 +266,7 @@ def save_accounts_txt():
         for idx, acc in enumerate(ready_accounts, 1):
             email = acc.get("email", "")
             pin = acc.get("otp", "") or acc.get("pin", "")
-            otp_link = f"{tunnel_url}/otp?email={urllib.parse.quote(email)}&pin={urllib.parse.quote(pin)}"
+            otp_link = f"{tunnel_url}/otp?email={urllib.parse.quote(email)}"
             proxy = acc.get("proxy_used", "Không dùng")
             lines.append(f"[{idx}] TÀI KHOẢN: {email}")
             lines.append(f"  • Email đăng nhập: {email}")
@@ -235,7 +290,7 @@ def save_accounts_txt():
         for acc in ready_accounts:
             email = acc.get("email", "")
             pin = acc.get("otp", "") or acc.get("pin", "")
-            otp_link = f"{tunnel_url}/otp?email={urllib.parse.quote(email)}&pin={urllib.parse.quote(pin)}"
+            otp_link = f"{tunnel_url}/otp?email={urllib.parse.quote(email)}"
             lines.append(f"{email}|{pin}|{otp_link}")
             
     if failed_accounts:
@@ -279,7 +334,7 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
     for idx, acc in enumerate(session_accounts, 1):
         email = acc.get("email", "")
         pin = acc.get("otp", "") or acc.get("pin", "")
-        otp_link = f"{tunnel_url}/otp?email={urllib.parse.quote(email)}&pin={urllib.parse.quote(pin)}"
+        otp_link = f"{tunnel_url}/otp?email={urllib.parse.quote(email)}"
         rows.append([idx, email, pin, otp_link])
         
     csv_filename = f"muse_session_{session_id}.csv"
@@ -342,50 +397,81 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
     except Exception as e:
         print("Error writing Excel session:", e)
 
+def redact_sensitive(text: str) -> str:
+    if not isinstance(text, str):
+        return text
+    # 1. Redact credentials in URLs: http://user:password@host -> http://user:***@host
+    text = re.sub(r'(https?|socks5?|socks5h)://([^:\s/@]+):([^@\s/]+)@', r'\1://\2:***@', text)
+    # 2. Redact OTP / PIN with labels: OTP: 123456, PIN: 123456
+    text = re.sub(r'(?i)\b(otp|pin|code|mã\s*(?:xác\s*thực|otp)?)\s*[:=]\s*([a-zA-Z0-9]{4,8})\b', r'\1: ***', text)
+    # 3. Redact secret / token / cookie
+    text = re.sub(r'(?i)\b(password|passwd|secret|token|cookie)=([^\s&]+)', r'\1=***', text)
+    return text
+
 def add_log(message: str, level: str = "info", progress: Optional[int] = None):
+    safe_msg = redact_sensitive(message)
     entry = {
         "time": time.strftime("%H:%M:%S"),
-        "message": message,
+        "message": safe_msg,
         "level": level,
         "progress": progress
     }
     state.logs.append(entry)
     if len(state.logs) > 500:
         state.logs = state.logs[-500:]
-    state.current_step = message
-    print(f"[{entry['time']}] [{level.upper()}] {message}")
+    state.current_step = safe_msg
+    print(f"[{entry['time']}] [{level.upper()}] {safe_msg}")
 
 class StartBotRequest(BaseModel):
     count: int = 1
     proxy: Optional[str] = None
-    proxyType: Optional[str] = "psiphon"  # "psiphon", "vpn", "custom", "auto"
+    proxyType: Optional[str] = "psiphon"  # "psiphon", "vpn", "custom", "auto", "windscribe"
     visible: bool = True
     provider: str = "clean_tempmail"  # "clean_tempmail" or "spinupmail"
     domain: str = "maxxspace.com"
-    inviteCode: Optional[str] = "QKPLQ6"
+    inviteCode: Optional[str] = None
+
+    @field_validator("proxyType")
+    @classmethod
+    def validate_proxy_type(cls, v):
+        allowed = {"psiphon", "vpn", "custom", "auto", "windscribe"}
+        if v is not None and v.strip().lower() not in allowed:
+            raise ValueError(f"Unknown proxy provider: '{v}'. Must be one of {allowed}")
+        return (v or "psiphon").strip().lower()
+
+    @field_validator("count")
+    @classmethod
+    def validate_count(cls, v):
+        if v <= 0:
+            raise ValueError("Số lượng tài khoản phải lớn hơn 0")
+        return v
+
 
 async def create_clean_email() -> str:
-    add_log("Đang tạo email từ Clean TempMail Engine (vượt kiểm duyệt MX của Meta)...", "info", 10)
+    add_log("Đang tạo email tên miền sạch (ưu tiên fraudfindez.com / chuẩn Meta, loại bỏ hoàn toàn mtempmail)...", "info", 10)
     url = f"{MTEMP_BASE_URL}/emails/{MTEMP_API_KEY}"
     loop = asyncio.get_event_loop()
     def _fetch():
-        em = ""
-        for _ in range(15):
+        for _ in range(30):
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}, data=b"{}")
                 with urllib.request.urlopen(req, timeout=12) as resp:
                     data = json.loads(resp.read().decode())
                     candidate = data.get("data", {}).get("email", "")
                     domain = candidate.split("@")[-1].lower() if "@" in candidate else ""
-                    # Enforce global TLD (.com, .net, .org) and reject country-code TLDs (.pl, .vn, .ru, etc.)
-                    if (domain.endswith(".com") or domain.endswith(".net") or domain.endswith(".org")) and not (domain.endswith(".pl") or domain.endswith(".vn") or domain.endswith(".ru")):
+                    # Strictly reject any domain with 'temp' or 'mail', or non-global TLDs
+                    if "temp" in domain or "mail" in domain or domain.endswith(".pl") or domain.endswith(".ru") or domain.endswith(".vn"):
+                        continue
+                    if domain.endswith(".com") or domain.endswith(".net") or domain.endswith(".org"):
                         return candidate
             except Exception:
                 pass
-            time.sleep(0.5)
-        return em
+            time.sleep(0.3)
+        return ""
     email = await loop.run_in_executor(None, _fetch)
-    add_log(f"Đã tạo Clean TempMail (Global Domain): {email}", "success", 20)
+    if not email:
+        raise Exception("Không tìm thấy email có tên miền sạch (đã loại bỏ mtempmail). Vui lòng thử lại sau giây lát.")
+    add_log(f"Đã tạo email tên miền sạch: {email}", "success", 20)
     return email
 
 async def poll_clean_otp(email: str, timeout_seconds: int = 75) -> str:
@@ -467,70 +553,51 @@ async def poll_spinup_otp(email: str, pin: str, timeout_seconds: int = 75) -> st
         await asyncio.sleep(2)
     raise TimeoutError("Hết thời gian chờ OTP từ Meta.")
 
-async def process_single_account(proxy_str: Optional[str], visible: bool, provider: str, domain: str, inviteCode: Optional[str] = "QKPLQ6") -> Dict[str, Any]:
-    pin = ""
-    if provider == "clean_tempmail":
-        email = await create_clean_email()
-    else:
-        email, pin = await create_spinup_email(domain)
-    
+async def process_single_account(proxy_str: Optional[str], visible: bool, provider: str, domain: str, inviteCode: Optional[str] = None) -> Dict[str, Any]:
     proxy_config = to_playwright_proxy(proxy_str)
     if proxy_config:
         add_log(f"Cấu hình Proxy: {proxy_config['server']}", "info")
     else:
         add_log("Sử dụng mạng máy chủ / VPN trên máy tính", "info")
         
-    # Pre-flight check exit IP route
+    # Pre-flight check exit IP route BEFORE email allocation
     route_res = check_route_ip(proxy_str)
-    if route_res.get("ok"):
-        ip_info = route_res.get("data", {})
-        ip_addr = ip_info.get("query", "Unknown")
-        country = ip_info.get("country", "")
-        country_code = ip_info.get("countryCode", "")
-        isp_name = ip_info.get("isp", "")
-        is_us = route_res.get("is_us", False)
-        add_log(f"Kiểm tra IP kết nối: {ip_addr} ({country} - {isp_name})", "info", 15)
-        
-        if not is_us:
-            err_msg = f"CHẶN VÙNG: IP kết nối là {ip_addr} ({country} - {isp_name}), không thuộc Hoa Kỳ/Canada! Meta Muse sẽ lập tức đưa tài khoản vào Waitlist. Hủy tạo để bảo vệ email."
-            add_log(f"❌ {err_msg}", "error", 100)
-            raise Exception(err_msg)
+    if not route_res.get("ok"):
+        err_msg = f"Không thể xác minh tuyến mạng IP: {route_res.get('error')}"
+        add_log(f"❌ {err_msg}", "error", 100)
+        raise Exception(err_msg)
+
+    ip_info = route_res.get("data", {})
+    ip_addr = ip_info.get("query", "Unknown")
+    country = ip_info.get("country", "")
+    isp_name = ip_info.get("isp", "")
+    is_us = route_res.get("is_us", False)
+    is_ca = route_res.get("is_ca", False)
+    add_log(f"Kiểm tra IP kết nối: {ip_addr} ({country} - {isp_name})", "info", 15)
+    
+    if not is_us and not is_ca:
+        err_msg = f"CHẶN VÙNG: IP kết nối là {ip_addr} ({country} - {isp_name}), không thuộc Hoa Kỳ/Canada! Hủy tạo để bảo vệ email."
+        add_log(f"❌ {err_msg}", "error", 100)
+        raise Exception(err_msg)
+
+    # Allocate email ONLY after route is verified
+    pin = ""
+    if provider == "clean_tempmail":
+        email = await create_clean_email()
     else:
-        add_log(f"Cảnh báo kiểm tra IP: {route_res.get('error')}", "warning", 15)
+        email, pin = await create_spinup_email(domain)
 
     async with async_playwright() as p:
         add_log("Đang khởi động trình duyệt tự động...", "info", 25)
         
-        launch_args = [
-            "--disable-blink-features=AutomationControlled",
-            "--lang=en-US,en",
-            "--disable-dev-shm-usage",
-            "--disable-infobars",
-            "--disable-webrtc",
-            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-            "--enforce-webrtc-ip-permission-check",
-        ]
-        
         browser = await p.chromium.launch(
-            executable_path=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             headless=not visible,
             proxy=proxy_config,
-            args=launch_args
         )
         
         context = await browser.new_context(
-            locale="en-US",
-            timezone_id="America/New_York",
             viewport={"width": 1280, "height": 800},
-            geolocation={"latitude": 40.7128, "longitude": -74.0060},
-            permissions=["geolocation"]
         )
-        
-        await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            window.chrome = { runtime: {} };
-        """)
         
         page = await context.new_page()
         
@@ -591,44 +658,115 @@ async def process_single_account(proxy_str: Optional[str], visible: bool, provid
             await page.keyboard.press("Enter")
             
         add_log("Đã xác nhận OTP, chờ kiểm tra hồ sơ...", "info", 80)
-        await asyncio.sleep(4)
         
-        # 5. Check if Name & Birthday screen
-        body_text = await page.inner_text("body")
-        if "finish creating your account" in body_text.lower() or "birthday" in body_text.lower() or "first name" in body_text.lower():
-            add_log("Đang tự động điền Họ tên và Ngày sinh theo chuẩn Meta...", "info", 85)
-            text_inps = [i for i in await page.query_selector_all("input") if (await i.get_attribute("type") or "text") not in ["hidden", "checkbox", "radio"]]
-            if len(text_inps) >= 2:
-                await text_inps[0].click()
-                await page.keyboard.type("Alex", delay=50)
-                await asyncio.sleep(0.2)
-                await text_inps[1].click()
-                await page.keyboard.type("Miller", delay=50)
-                await asyncio.sleep(0.2)
-                
+        # 5. Check if Name & Birthday screen with adaptive wait
+        is_profile = False
+        for _ in range(8):
+            await asyncio.sleep(1)
             try:
-                await page.locator("select").nth(0).select_option(index=8)
-                await page.locator("select").nth(1).select_option(label="15")
-                await page.locator("select").nth(2).select_option(label="1996")
+                body_text = (await page.inner_text("body")).lower()
+                if "finish creating your account" in body_text or "birthday" in body_text or "first name" in body_text:
+                    is_profile = True
+                    break
+                if "/thread" in page.url:
+                    break
             except Exception:
                 pass
+
+        if is_profile:
+            add_log("Đang tự động điền Họ tên và Ngày sinh (>18 tuổi) theo chuẩn Meta...", "info", 85)
+            try:
+                import random
+                first_names = ["Alex", "Jordan", "Taylor", "Morgan", "Sam", "Chris", "Jamie", "Riley", "Casey", "Avery", "Daniel", "David", "Lucas", "Oliver"]
+                last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Miller", "Davis", "Wilson", "Anderson", "Taylor", "Martin", "Harris"]
+                fn = random.choice(first_names)
+                ln = random.choice(last_names)
                 
-            await asyncio.sleep(1)
-            finish_btn = page.locator('button:has-text("Confirm"), button:has-text("Save"), button:has-text("Continue")').first
-            if await finish_btn.count() > 0:
-                await finish_btn.click()
-            else:
-                await page.keyboard.press("Enter")
+                # Check for explicit input fields
+                fn_input = page.locator('input[placeholder*="First" i], input[name*="first" i], input[aria-label*="First" i]').first
+                ln_input = page.locator('input[placeholder*="Last" i], input[name*="last" i], input[aria-label*="Last" i]').first
                 
-            add_log("Đang chờ Meta hoàn tất đăng ký tài khoản...", "info", 90)
-            await asyncio.sleep(6)
+                if await fn_input.count() > 0 and await ln_input.count() > 0:
+                    await fn_input.click()
+                    await fn_input.fill(fn)
+                    await asyncio.sleep(0.2)
+                    await ln_input.click()
+                    await ln_input.fill(ln)
+                    await asyncio.sleep(0.2)
+                else:
+                    text_inps = [i for i in await page.query_selector_all("input") if (await i.get_attribute("type") or "text") not in ["hidden", "checkbox", "radio", "submit", "button"]]
+                    if len(text_inps) >= 2:
+                        await text_inps[0].click()
+                        await page.keyboard.type(fn, delay=40)
+                        await asyncio.sleep(0.2)
+                        await text_inps[1].click()
+                        await page.keyboard.type(ln, delay=40)
+                        await asyncio.sleep(0.2)
+                    elif len(text_inps) == 1:
+                        await text_inps[0].click()
+                        await page.keyboard.type(f"{fn} {ln}", delay=40)
+                        await asyncio.sleep(0.2)
+
+                selects = await page.query_selector_all("select")
+                if len(selects) >= 3:
+                    try:
+                        await page.locator("select").nth(0).select_option(index=random.randint(1, 11))
+                    except Exception:
+                        pass
+                    try:
+                        await page.locator("select").nth(1).select_option(label=str(random.randint(10, 26)))
+                    except Exception:
+                        try:
+                            await page.locator("select").nth(1).select_option(index=15)
+                        except Exception:
+                            pass
+                    try:
+                        birth_year = str(random.randint(1993, 2002))
+                        await page.locator("select").nth(2).select_option(label=birth_year)
+                    except Exception:
+                        try:
+                            await page.locator("select").nth(2).select_option(value=birth_year)
+                        except Exception:
+                            pass
+
+                await asyncio.sleep(1)
+                finish_btn = page.locator('button:has-text("Confirm"), button:has-text("Save"), button:has-text("Continue"), button:has-text("Next"), button[type="submit"]').first
+                if await finish_btn.count() > 0:
+                    await finish_btn.click(force=True)
+                else:
+                    await page.keyboard.press("Enter")
+                    
+                add_log("Đã gửi thông tin hồ sơ (>18 tuổi), đang chờ Meta xác nhận...", "info", 90)
+            except Exception as e:
+                add_log(f"Lưu ý khi tự động điền hồ sơ: {e}", "warning")
+            
+            # Step 1: Wait up to 12s for the profile screen to dismiss naturally
+            for _ in range(12):
+                await asyncio.sleep(1)
+                if state.stop_requested:
+                    break
+                try:
+                    cur_body = (await page.inner_text("body")).lower()
+                    if "finish creating your account" not in cur_body and "birthday" not in cur_body and "first name" not in cur_body:
+                        break
+                except Exception:
+                    break
+
+            # Step 2: Allow Meta to complete its OAuth / session handshake naturally
+            add_log("Đang chờ Meta hoàn tất đồng bộ phiên đăng nhập...", "info", 92)
+            for _ in range(8):
+                await asyncio.sleep(1)
+                cur_url = page.url.lower()
+                if "muse.ai" in cur_url and ("access" in cur_url or "thread" in cur_url or "waitlist" in cur_url):
+                    break
             
         # 7. Strict Verification: Check if account entered chat or got waitlisted
         add_log("Đang kiểm tra quyền truy cập vào màn hình Chat Muse.ai...", "info", 94)
         try:
-            if "/thread" not in page.url:
-                await page.goto("https://muse.ai/thread/new", wait_until="domcontentloaded", timeout=25000)
-                await asyncio.sleep(4)
+            # Only navigate to /thread/new if page has naturally established session on muse.ai and is not already on access/thread
+            if "muse.ai" in page.url and "/thread" not in page.url and "/access" not in page.url:
+                await page.goto("https://muse.ai/thread/new", wait_until="domcontentloaded", timeout=15000)
+                await asyncio.sleep(3)
         except Exception:
             pass
 
@@ -708,80 +846,81 @@ async def process_single_account(proxy_str: Optional[str], visible: bool, provid
 
 async def bot_worker(req: StartBotRequest):
     state.is_running = True
-    state.stop_requested = False
+    if state.stop_requested:
+        add_log("Phiên đã được yêu cầu dừng trước khi worker bắt đầu. Hủy bỏ tác vụ an toàn.", "warning")
+        state.is_running = False
+        return
+        
     state.session_accounts = []
     state.session_id = time.strftime("%Y%m%d_%H%M%S")
     state.session_time = time.strftime("%Y-%m-%d %H:%M:%S")
     add_log(f"Bắt đầu phiên tạo {req.count} tài khoản Muse.ai ({req.provider})...", "info", 0)
     
-    # Tự động bật đường hầm Psiphon US ngầm nếu chọn Psiphon (hoặc mặc định)
-    if req.proxyType == "windscribe":
-        add_log("Đang kết nối Windscribe bằng CLI chính thức (gói hiện có, không nâng cấp)...", "info", 3)
-        vpn_result = await asyncio.to_thread(connect_free_us)
-        if not vpn_result.get("ok"):
-            add_log(vpn_result.get("error", "Chưa kết nối được Windscribe"), "error", 100)
-            state.is_running = False
-            return
-        req.proxy = None
-        add_log("Đã xác minh kết nối Windscribe Mỹ/Canada.", "info", 8)
-    elif req.proxyType == "psiphon" or (not req.proxy and req.proxyType not in ["vpn", "custom", "windscribe"]):
-        add_log("🚀 Tự động kích hoạt đường hầm Psiphon US ngầm trên máy...", "info", 3)
-        loop = asyncio.get_event_loop()
-        psi_res = await loop.run_in_executor(None, start_psiphon_tunnel, 25)
-        if not psi_res or not psi_res.get("ok") or not psi_res.get("is_us"):
-            err_msg = (psi_res or {}).get("error", "Không thể khởi động đường hầm Psiphon US")
+    try:
+        # 1. Deterministic unified route resolution
+        route_info = await resolve_provider_route(req.proxyType or "psiphon", req.proxy)
+        if not route_info.get("ok"):
+            err_msg = route_info.get("error", "Không thể giải quyết tuyến mạng.")
             add_log(f"❌ {err_msg}", "error", 100)
-            state.is_running = False
             return
-        req.proxy = psi_res.get("proxy", "http://127.0.0.1:8085")
-        psi_info = psi_res.get("data", {})
-        add_log(f"✅ Đường hầm Psiphon US đã sẵn sàng! IP: {psi_info.get('query')} ({psi_info.get('city')}, US - {psi_info.get('isp')})", "success", 8)
-    elif req.proxyType == "auto" and not req.proxy:
-        req.proxy = "socks5://193.25.215.182:22222"
-        
-    success_count = 0
-    for i in range(req.count):
-        if state.stop_requested:
-            add_log("Đã dừng quy trình theo yêu cầu.", "warning")
-            break
             
-        add_log(f"--- Đang tạo tài khoản {i + 1}/{req.count} ---", "info")
-        try:
-            acc = await process_single_account(req.proxy, req.visible, req.provider, req.domain, req.inviteCode)
-            if acc and acc.get("status") == "SUCCESS_CHAT_READY" and acc.get("requirementsComplete", False):
-                state.session_accounts.append(acc)
-                success_count += 1
-                save_session_csv_and_excel(state.session_accounts, state.session_id)
-            elif acc and acc.get("status") == "SUCCESS_CHAT_READY":
-                add_log("Tài khoản đã vào chat nhưng chưa xác nhận đổi mã mời. Dừng để xử lý trên tài khoản này, không tạo thêm.", "warning")
+        req.proxy = route_info.get("proxy")
+            
+        success_count = 0
+        for i in range(req.count):
+            if state.stop_requested:
+                add_log("Đã dừng quy trình theo yêu cầu.", "warning")
                 break
-        except MuseAccessError as e:
-            add_log(f"Dừng phiên: {e}. Không tiếp tục tạo thêm tài khoản khi chưa vào được chat.", "error")
-            break
-        except Exception as e:
-            add_log(f"Lỗi ở tài khoản {i + 1}: {type(e).__name__}: {str(e)}", "error")
+                
+            add_log(f"--- Đang tạo tài khoản {i + 1}/{req.count} ---", "info")
+            try:
+                acc = await process_single_account(req.proxy, req.visible, req.provider, req.domain, req.inviteCode)
+                if isinstance(acc, dict) and acc.get("status") == "SUCCESS_CHAT_READY" and acc.get("requirementsComplete", False):
+                    state.session_accounts.append(acc)
+                    success_count += 1
+                    save_session_csv_and_excel(state.session_accounts, state.session_id)
+                elif isinstance(acc, dict) and acc.get("status") == "SUCCESS_CHAT_READY":
+                    add_log("Tài khoản đã vào chat nhưng chưa xác nhận đổi mã mời. Dừng để xử lý trên tài khoản này, không tạo thêm.", "warning")
+                    break
+            except MuseAccessError as e:
+                add_log(f"Dừng phiên: {e}. Không tiếp tục tạo thêm tài khoản khi chưa vào được chat.", "error")
+                break
+            except Exception as e:
+                add_log(f"Lỗi ở tài khoản {i + 1}: {type(e).__name__}: {str(e)}", "error")
+                
+            if i < req.count - 1 and not state.stop_requested:
+                add_log("Nghỉ 3 giây trước tài khoản tiếp theo...", "info")
+                await asyncio.sleep(3)
+                
+        if state.session_accounts:
+            save_session_csv_and_excel(state.session_accounts, state.session_id)
+            add_log(f"📊 Đã tự động xuất File CSV & Excel riêng cho phiên này ({len(state.session_accounts)} tài khoản)!", "success", 100)
             
-        if i < req.count - 1 and not state.stop_requested:
-            add_log("Nghỉ 3 giây trước tài khoản tiếp theo...", "info")
-            await asyncio.sleep(3)
-            
-    if state.session_accounts:
-        save_session_csv_and_excel(state.session_accounts, state.session_id)
-        add_log(f"📊 Đã tự động xuất File CSV & Excel riêng cho phiên này ({len(state.session_accounts)} tài khoản)!", "success", 100)
-        
-    state.is_running = False
-    add_log(f"Kết thúc phiên: {success_count}/{req.count} tài khoản hoàn tất yêu cầu chat và mã mời.", "success" if success_count == req.count else "warning" if success_count else "error", 100)
+        add_log(f"Kết thúc phiên: {success_count}/{req.count} tài khoản hoàn tất yêu cầu chat và mã mời.", "success" if success_count == req.count else "warning" if success_count else "error", 100)
+    finally:
+        state.is_running = False
+
+_job_lock = asyncio.Lock()
 
 @app.post("/api/bot/start")
 async def start_bot(req: StartBotRequest, bg_tasks: BackgroundTasks):
-    if state.is_running:
-        raise HTTPException(status_code=400, detail="Bot đang chạy, vui lòng chờ hoặc bấm dừng.")
-    try:
-        normalize_invite_code(req.inviteCode)
-    except ValueError as error:
-        raise HTTPException(status_code=422, detail=str(error))
-    state.logs = []
-    bg_tasks.add_task(bot_worker, req)
+    if req.count <= 0:
+        raise HTTPException(status_code=422, detail="Số lượng tài khoản phải lớn hơn 0.")
+    if req.inviteCode:
+        try:
+            normalize_invite_code(req.inviteCode)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+            
+    async with _job_lock:
+        if state.is_running:
+            raise HTTPException(status_code=409, detail="Bot đang chạy, vui lòng chờ hoặc bấm dừng.")
+        state.is_running = True
+        state.stop_requested = False
+        state.current_step = "Đang khởi tạo phiên làm việc..."
+        state.logs = []
+        bg_tasks.add_task(bot_worker, req)
+        
     return {"ok": True, "message": "Bot đã được khởi chạy"}
 
 @app.post("/api/bot/stop")
@@ -809,10 +948,17 @@ async def get_accounts():
                 state.accounts = json.load(f)
         except Exception:
             pass
+    sanitized = []
+    for a in state.accounts:
+        acc_copy = dict(a)
+        if "cookies" in acc_copy:
+            acc_copy["hasCookies"] = bool(acc_copy["cookies"])
+            del acc_copy["cookies"]
+        sanitized.append(acc_copy)
     return {
         "ok": True,
-        "count": len(state.accounts),
-        "accounts": state.accounts
+        "count": len(sanitized),
+        "accounts": sanitized
     }
 
 @app.delete("/api/bot/accounts")
@@ -821,18 +967,137 @@ async def clear_accounts():
     save_accounts()
     return {"ok": True, "message": "Đã xóa lịch sử tài khoản"}
 
+ALLOWED_SCREENSHOT_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+
 @app.get("/api/bot/screenshot/{filename}")
 async def get_screenshot(filename: str):
-    path = os.path.join(SCREENSHOTS_DIR, filename)
-    if os.path.exists(path):
-        return FileResponse(path, media_type="image/png")
-    fallback = os.path.join(os.path.dirname(__file__), filename)
-    if os.path.exists(fallback):
-        return FileResponse(fallback, media_type="image/png")
-    raise HTTPException(status_code=404, detail="Screenshot not found")
+    safe_name = os.path.basename(filename)
+    ext = os.path.splitext(safe_name)[1].lower()
+    if ext not in ALLOWED_SCREENSHOT_EXTS:
+        raise HTTPException(status_code=400, detail="Chỉ cho phép định dạng ảnh hợp lệ (.png, .jpg, .webp)")
+    real_root = os.path.realpath(SCREENSHOTS_DIR)
+    real_path = os.path.realpath(os.path.join(SCREENSHOTS_DIR, safe_name))
+    if not real_path.startswith(real_root + os.sep) or not os.path.isfile(real_path):
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+    media = "image/png" if ext == ".png" else f"image/{ext.lstrip('.')}"
+    return FileResponse(real_path, media_type=media)
+
+async def resolve_provider_route(proxy_type: Optional[str], custom_proxy: Optional[str] = None) -> Dict[str, Any]:
+    ptype = (proxy_type or "psiphon").strip().lower()
+    if ptype == "psiphon":
+        alive = await asyncio.to_thread(is_psiphon_alive)
+        if not alive:
+            alive = await asyncio.to_thread(start_psiphon_tunnel, 25)
+        if not alive or not alive.get("ok"):
+            return {
+                "ok": False,
+                "error": (alive or {}).get("error", "Không thể khởi động đường hầm Psiphon US."),
+                "provider": "psiphon"
+            }
+        return {
+            "ok": True,
+            "provider": "psiphon",
+            "proxy": alive.get("proxy", "http://127.0.0.1:8086"),
+            "networkMode": "proxy",
+            "is_us": alive.get("is_us", False),
+            "is_ca": alive.get("is_ca", False),
+            "data": alive.get("data")
+        }
+    elif ptype == "vpn":
+        return {
+            "ok": True,
+            "provider": "vpn",
+            "proxy": None,
+            "networkMode": "system"
+        }
+    elif ptype == "custom":
+        norm = normalize_proxy(custom_proxy)
+        if not norm:
+            return {
+                "ok": False,
+                "error": "Chưa cung cấp proxy riêng hoặc định dạng không hợp lệ.",
+                "provider": "custom"
+            }
+        return {
+            "ok": True,
+            "provider": "custom",
+            "proxy": norm,
+            "networkMode": "proxy"
+        }
+    elif ptype == "auto":
+        active_path = os.path.join(os.path.dirname(__file__), "active_us_proxy.json")
+        if not os.path.exists(active_path):
+            return {
+                "ok": False,
+                "error": "Chưa có cấu hình proxy tự động trong active_us_proxy.json.",
+                "provider": "auto"
+            }
+        try:
+            with open(active_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            candidate = data.get("proxy")
+            if not candidate:
+                return {
+                    "ok": False,
+                    "error": "File active_us_proxy.json không chứa địa chỉ proxy hợp lệ.",
+                    "provider": "auto"
+                }
+            # Saved Auto candidate must be probed with TTL (3600 seconds)
+            last_checked = data.get("last_checked", 0)
+            if time.time() - last_checked > 3600:
+                probe_res = await asyncio.to_thread(check_route_ip, candidate)
+                if not probe_res.get("ok") or not probe_res.get("is_us"):
+                    return {
+                        "ok": False,
+                        "error": f"Proxy tự động đã hết hạn hoặc không khả dụng: {probe_res.get('error', 'IP không thuộc Hoa Kỳ')}",
+                        "provider": "auto"
+                    }
+                data["last_checked"] = time.time()
+                try:
+                    with open(active_path, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2)
+                except Exception:
+                    pass
+            return {
+                "ok": True,
+                "provider": "auto",
+                "proxy": candidate,
+                "networkMode": "proxy",
+                "data": data
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"Lỗi đọc cấu hình proxy tự động: {e}",
+                "provider": "auto"
+            }
+    elif ptype == "windscribe":
+        vpn_res = await asyncio.to_thread(connect_free_us)
+        if not vpn_res.get("ok"):
+            return {
+                "ok": False,
+                "error": vpn_res.get("error", "Không thể kết nối Windscribe."),
+                "provider": "windscribe"
+            }
+        return {
+            "ok": True,
+            "provider": "windscribe",
+            "proxy": None,
+            "networkMode": "system",
+            "is_us": vpn_res.get("is_us", False),
+            "is_ca": vpn_res.get("is_ca", False),
+            "data": vpn_res.get("data")
+        }
+    else:
+        return {
+            "ok": False,
+            "error": f"Nhà cung cấp mạng '{proxy_type}' không hợp lệ hoặc chưa được hỗ trợ.",
+            "provider": ptype
+        }
+
 
 async def ensure_free_tunnel():
-    result = await asyncio.get_running_loop().run_in_executor(None, start_psiphon_tunnel, 25)
+    result = await resolve_provider_route("psiphon")
     if not result or not result.get("ok") or not result.get("is_us"):
         raise HTTPException(status_code=503, detail=(result or {}).get("error", "Chưa xác minh được kết nối Mỹ/Canada."))
     return result
@@ -897,30 +1162,15 @@ class CheckProxyRequest(BaseModel):
 
 @app.post("/api/bot/check-proxy-health")
 async def check_proxy_health(req: CheckProxyRequest):
-    p_str = req.proxy
-    if req.proxyType == "psiphon":
-        alive = await asyncio.to_thread(is_psiphon_alive)
-        if not alive:
-            loop = asyncio.get_event_loop()
-            alive = await loop.run_in_executor(None, start_psiphon_tunnel, 25)
-        if alive and alive.get("ok"):
-            p_str = alive.get("proxy", "http://127.0.0.1:8085")
-        else:
-            return {"ok": False, "error": alive.get("error", "Không thể khởi động Psiphon Tunnel")}
-    elif req.proxyType == "vpn":
-        p_str = None
-    elif req.proxyType == "auto" and not p_str:
-        active_path = os.path.join(os.path.dirname(__file__), "active_us_proxy.json")
-        if os.path.exists(active_path):
-            try:
-                with open(active_path, "r", encoding="utf-8") as f:
-                    p_str = json.load(f).get("proxy")
-            except Exception:
-                pass
-        if not p_str:
-            p_str = "socks5://193.25.215.182:22222"
-            
+    route_info = await resolve_provider_route(req.proxyType, req.proxy)
+    if not route_info.get("ok"):
+        return {"ok": False, "error": route_info.get("error", "Không thể xác định cấu hình proxy.")}
+    p_str = route_info.get("proxy")
     res = await asyncio.to_thread(check_route_ip, p_str)
+    if not res.get("ok"):
+        return res
+    res["provider"] = route_info.get("provider")
+    res["networkMode"] = route_info.get("networkMode")
     return res
 
 @app.post("/api/bot/start-psiphon")
@@ -942,10 +1192,11 @@ async def api_psiphon_status():
 @app.post("/api/bot/auto-proxy")
 async def auto_proxy():
     active_path = os.path.join(os.path.dirname(__file__), "active_us_proxy.json")
-    try:
-        if os.path.exists(active_path):
+    if os.path.exists(active_path):
+        try:
             with open(active_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if data.get("proxy"):
                 return {
                     "ok": True,
                     "proxy": data["proxy"],
@@ -954,15 +1205,11 @@ async def auto_proxy():
                     "region": f"{data.get('city')}, {data.get('region')}, US",
                     "ping": data.get("ping")
                 }
-    except Exception:
-        pass
+        except Exception:
+            pass
     return {
-        "ok": True,
-        "proxy": "socks5://193.25.215.182:22222",
-        "ip": "193.25.215.182",
-        "isp": "ReadyDedis, LLC",
-        "region": "Los Angeles, California, US",
-        "ping": 0.91
+        "ok": False,
+        "error": "Chưa có cấu hình proxy tự động trong active_us_proxy.json."
     }
 
 @app.get("/api/bot/export-txt")
@@ -994,7 +1241,7 @@ async def get_session_info():
             "id": acc.get("id"),
             "email": email,
             "pin": pin,
-            "otpLink": f"{tunnel_url}/otp?email={urllib.parse.quote(email)}&pin={urllib.parse.quote(pin)}",
+            "otpLink": f"{tunnel_url}/otp?email={urllib.parse.quote(email)}",
             "createdAt": acc.get("createdAt", "")
         })
     return {
@@ -1013,7 +1260,8 @@ async def export_session_csv(session_id: Optional[str] = None):
     target_id = session_id or state.session_id
     file_path = None
     if target_id:
-        file_path = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.csv")
+        safe_id = "".join(c for c in target_id if c.isalnum() or c in ("_", "-"))
+        file_path = os.path.join(EXPORTS_DIR, f"muse_session_{safe_id}.csv")
     if not file_path or not os.path.exists(file_path):
         file_path = os.path.join(EXPORTS_DIR, "muse_session_latest.csv")
     if not os.path.exists(file_path):
@@ -1034,7 +1282,8 @@ async def export_session_excel(session_id: Optional[str] = None):
     target_id = session_id or state.session_id
     file_path = None
     if target_id:
-        file_path = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.xlsx")
+        safe_id = "".join(c for c in target_id if c.isalnum() or c in ("_", "-"))
+        file_path = os.path.join(EXPORTS_DIR, f"muse_session_{safe_id}.xlsx")
     if not file_path or not os.path.exists(file_path):
         file_path = os.path.join(EXPORTS_DIR, "muse_session_latest.xlsx")
     if not os.path.exists(file_path):

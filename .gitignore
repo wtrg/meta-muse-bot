@@ -46,6 +46,9 @@ blob-report/
 # muse bot runtime, accounts, and exports
 scripts/muse_accounts.json
 scripts/muse_accounts.txt
+scripts/*_account*.json
+scripts/invite_reservations.json*
+scripts/bot_job_state.json*
 muse_accounts.txt
 muse_session_*
 scripts/exports/
@@ -70,3 +73,5 @@ scripts/*cookies*.json
 scripts/muse_page_dump.html
 scripts/fast_us_proxies.json
 scripts/live_us_proxies.json
+
+reports/

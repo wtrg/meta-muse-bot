@@ -32,31 +32,49 @@ def system_route():
         return None
 
 
+import tempfile
+
+def _run_cli(args, timeout=15):
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8", errors="replace") as f:
+        try:
+            p = subprocess.run(args, stdout=f, stderr=f, timeout=timeout)
+            f.seek(0)
+            return p.returncode, f.read()
+        except subprocess.TimeoutExpired:
+            return -1, "TimeoutExpired"
+        except Exception as e:
+            return -1, str(e)
+
+
 def connect_free_us():
     cli = cli_path()
     if not cli:
         return {"ok": False, "error": "Chưa tìm thấy ứng dụng Windscribe chính thức trên máy."}
     with _lock:
         try:
-            state = subprocess.run([cli, "status"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
-            text = state.stdout.lower()
+            code, out = _run_cli([cli, "status"], timeout=10)
+            text = out.lower()
             if "unknown error" in text or "lỗi không xác định" in text:
-                return {"ok": False, "error": "Ứng dụng Windscribe đang báo lỗi API/đăng nhập. Chưa tiếp tục đăng ký Muse."}
-            if "logged out" in text or "đăng xuất" in text:
-                return {"ok": False, "error": "Windscribe chưa đăng nhập. Cần đăng nhập tài khoản Free một lần trước khi tool tự kết nối."}
+                return {"ok": False, "error": "Ứng dụng Windscribe trên máy đang báo lỗi API hoặc chưa đăng nhập. Vui lòng mở Windscribe đăng nhập hoặc dùng Psiphon."}
+            if "logged out" in text or "đăng xuất" in text or "chưa đăng nhập" in text:
+                return {"ok": False, "error": "Windscribe chưa đăng nhập. Cần đăng nhập tài khoản Free một lần trên ứng dụng Windows trước khi tool tự kết nối."}
             # A normal US location uses the current account plan. No subscription,
             # upgrade, static-IP, purchase, or Pro-only rotation command is issued.
-            result = subprocess.run([cli, "connect", "US"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
-            if result.returncode:
-                return {"ok": False, "error": "Windscribe chưa kết nối được máy chủ US của gói hiện tại. Không tự nâng cấp hay thanh toán."}
-            verified = subprocess.run([cli, "status"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
-            status_text = verified.stdout.lower()
+            code, connect_out = _run_cli([cli, "connect", "US"], timeout=30)
+            connect_text = connect_out.lower()
+            if code != 0 or "chưa đăng nhập" in connect_text or "logged out" in connect_text:
+                return {"ok": False, "error": "Windscribe chưa kết nối được máy chủ US của gói hiện tại (chưa đăng nhập hoặc vị trí bận). Vui lòng kiểm tra app Windscribe hoặc dùng Psiphon."}
+            code, verified_out = _run_cli([cli, "status"], timeout=10)
+            status_text = verified_out.lower()
             if not any(term in status_text for term in ("connect state: connected", "trạng thái kết nối: đã kết nối", "trạng thái kết nối: kết nối")):
                 return {"ok": False, "error": "Windscribe chưa xác nhận đã kết nối; không dùng mã thoát CLI để suy ra thành công."}
             route = system_route()
-            if not route or route.get("countryCode") not in ("US", "CA"):
+            country_code = (route.get("countryCode") or "").upper() if route else ""
+            if not route or country_code not in ("US", "CA"):
                 return {"ok": False, "error": "Chưa xác minh được IP Mỹ/Canada qua Windscribe; không tiếp tục đăng ký."}
-            return {"ok": True, "is_us": True, "data": route, "proxy": None, "provider": "windscribe", "networkMode": "system"}
+            is_us = (country_code == "US")
+            is_ca = (country_code == "CA")
+            return {"ok": True, "is_us": is_us, "is_ca": is_ca, "data": route, "proxy": None, "provider": "windscribe", "networkMode": "system"}
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "Windscribe quá thời gian kết nối. Chưa đăng ký thêm tài khoản."}
         except OSError:

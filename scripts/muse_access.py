@@ -35,12 +35,83 @@ async def inspect_muse_access(page, continue_saved_login=False, attempts=8):
     continued = False
     for attempt in range(attempts):
         text = await page.inner_text("body")
-        editor = page.locator('textarea, [contenteditable="true"], input[placeholder*="Ask" i], input[placeholder*="goal" i], input[placeholder*="task" i], div[role="textbox"]')
+        lower_text = text.lower().replace("’", "'").replace("\u00a0", " ")
+        editor = page.locator('textarea, [contenteditable="true"], div[role="textbox"], input[placeholder*="Ask" i], input[placeholder*="Message" i]')
         visible = False
-        for candidate in await editor.all():
-            if await candidate.is_visible() and await candidate.is_enabled():
+        try:
+            candidates = await editor.all()
+        except Exception:
+            candidates = []
+            
+        is_non_chat_form = any(
+            term in lower_text for term in (
+                "preferences", "account setup", "setup", "edit profile",
+                "user profile", "search", "tìm kiếm", "chỉnh sửa",
+                "contact support", "contact us", "support", "feedback", "hỗ trợ"
+            )
+        ) and not ("how can i help" in lower_text)
+
+        
+        for candidate in candidates:
+            try:
+                if not (await candidate.is_visible() and await candidate.is_enabled()):
+                    continue
+                label = ""
+                placeholder = ""
+                if hasattr(candidate, "get_attribute") and callable(getattr(candidate, "get_attribute")):
+                    try:
+                        res = candidate.get_attribute("aria-label")
+                        aria = await res if asyncio.iscoroutine(res) else res
+                        if isinstance(aria, str):
+                            label += aria + " "
+                    except Exception:
+                        pass
+                    try:
+                        res = candidate.get_attribute("name")
+                        name = await res if asyncio.iscoroutine(res) else res
+                        if isinstance(name, str):
+                            label += name + " "
+                    except Exception:
+                        pass
+                    try:
+                        res = candidate.get_attribute("placeholder")
+                        ph = await res if asyncio.iscoroutine(res) else res
+                        if isinstance(ph, str):
+                            placeholder = ph
+                    except Exception:
+                        pass
+                        
+                combined = f"{label} {placeholder}".lower()
+                # 1. Reject inputs with search, profile, bio, feedback, task labels
+                if any(term in combined for term in ("search", "tìm kiếm", "bio", "profile", "hồ sơ", "feedback", "task", "goal")):
+                    continue
+                    
+                # 2. Reject non-chat forms (preferences, setup, profile, search) unless explicitly marked for Muse chat
+                if is_non_chat_form:
+                    if not any(term in combined for term in ("ask muse", "chat with muse", "hỏi muse")):
+                        continue
+
+                # 3. Positive chat requirement: must have chat-specific attributes, chat prompt text, or visible Send button
+                has_chat_attr = any(term in combined for term in ("ask muse", "message", "chat", "nhắn tin", "hỏi muse"))
+                has_chat_prompt = "how can i help" in lower_text
+                has_send = False
+                send_btn = page.locator('button[aria-label*="send" i], button[data-testid*="send" i], button:has-text("Send"), button:has-text("Gửi")')
+                try:
+                    for btn in await send_btn.all():
+                        if await btn.is_visible() and await btn.is_enabled():
+                            has_send = True
+                            break
+                except Exception:
+                    pass
+
+                if not (has_chat_attr or has_chat_prompt or has_send):
+                    continue
+
                 visible = True
                 break
+            except Exception:
+                continue
+                
         status, message = classify_access(page.url, text, visible)
         if status in ("WAITLISTED_GEOGATED", "WAITLISTED", "SUCCESS_CHAT_READY"):
             return {"status": status, "message": message}
@@ -53,3 +124,4 @@ async def inspect_muse_access(page, continue_saved_login=False, attempts=8):
         if attempt + 1 < attempts:
             await asyncio.sleep(2)
     return {"status": status, "message": message}
+

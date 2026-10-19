@@ -8,7 +8,7 @@ import psiphon_manager as manager
 
 class IntegrationTests(unittest.TestCase):
     def setUp(self):
-        self.client=TestClient(bot.app)
+        self.client=TestClient(bot.app, base_url='http://127.0.0.1:8790')
     def test_external_origin_cannot_read_bot_sessions(self):
         self.assertEqual(self.client.get('/api/bot/accounts', headers={'Origin':'https://external.example'}).status_code,403)
     def test_local_origin_can_use_tool(self):
