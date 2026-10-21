@@ -212,6 +212,28 @@ class MuseV5RegressionTests(unittest.TestCase):
             res_xlsx = self.client.get("/api/bot/export-session-excel")
             self.assertEqual(res_xlsx.status_code, 404)
 
+    def test_reserved_alias_latest_rejected_on_csv_and_excel(self):
+        # Reserved aliases ("latest", "current", "default", etc.) must return 400
+        # even if an old muse_session_latest artifact exists on disk
+        for alias in ("latest", "current", "default", "LATEST"):
+            r_csv = self.client.get(f"/api/bot/export-session-csv?session_id={alias}")
+            self.assertEqual(r_csv.status_code, 400)
+            self.assertIn("dành riêng", r_csv.json()["detail"])
+
+            r_xlsx = self.client.get(f"/api/bot/export-session-excel?session_id={alias}")
+            self.assertEqual(r_xlsx.status_code, 400)
+            self.assertIn("dành riêng", r_xlsx.json()["detail"])
+
+    def test_create_spinup_email_deprecated_fails_closed(self):
+        # create_spinup_email raises NotImplementedError due to A04 removal of unauth public endpoint
+        with self.assertRaises(NotImplementedError):
+            asyncio.run(bot.create_spinup_email("maxxspace.com"))
+
+    def test_start_bot_rejects_deprecated_spinupmail_provider(self):
+        # /api/bot/start with provider="spinupmail" returns 422
+        res = self.client.post("/api/bot/start", json={"count": 1, "provider": "spinupmail"})
+        self.assertEqual(res.status_code, 422)
+
     # 9. Psiphon Manager Owned Lifecycle and Collision Check
     def test_psiphon_manager_ownership_lifecycle(self):
         # 1) When psiphon_process is None, is_psiphon_alive returns None

@@ -42,12 +42,15 @@ export const getOrDerivePin = (
 
 /**
  * Generates a cryptographically secure 6-digit PIN using CSPRNG.
+ * Fails closed by throwing if CSPRNG is unavailable (no insecure pseudo-random fallback).
  */
 export const generateSecurePin = (): string => {
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
     const buf = new Uint32Array(1);
     crypto.getRandomValues(buf);
     return String(100000 + (buf[0] % 900000));
   }
-  return String(Math.floor(100000 + Math.random() * 900000));
+  throw new Error(
+    "CSPRNG_UNAVAILABLE: Cryptographically secure random number generator is required to generate PIN."
+  );
 };

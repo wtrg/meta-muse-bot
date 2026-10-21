@@ -13,11 +13,10 @@ except Exception:
 BACKEND_URL = "http://127.0.0.1:8787"
 
 def create_mail():
-    req_data = json.dumps({"count": 1, "prefix": "audit", "domain": "maxxspace.com"}).encode()
-    req = urllib.request.Request(f"{BACKEND_URL}/api/public/bulk-create", data=req_data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        item = json.loads(resp.read().decode())["items"][0]
-        return item["address"], item["pin"]
+    raise NotImplementedError(
+        "Cổng tạo email công khai ẩn danh (/api/public/bulk-create) đã bị gỡ bỏ theo khuyến nghị bảo mật A04. "
+        "Vui lòng quản lý hộp thư qua giao diện có xác thực hoặc sử dụng Clean TempMail."
+    )
 
 def poll_otp(email, pin):
     start = time.time()

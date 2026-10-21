@@ -1095,4 +1095,45 @@ describe("email addresses service", () => {
       },
     });
   });
+
+  it("provisions secure 6-digit PIN when requested via generatePin / auto", async () => {
+    const result = await createEmailAddress({
+      env: {
+        EMAIL_DOMAINS: "spinupmail.com",
+      } as unknown as CloudflareBindings,
+      organizationId: "org-1",
+      session,
+      payload: {
+        localPart: "secure.inbox",
+        domain: "spinupmail.com",
+        acceptedRiskNotice: true,
+        meta: { generatePin: true },
+      },
+    });
+
+    expect(result.status).toBe(200);
+    const insertCall = mocks.insertAddress.mock.calls[0];
+    const savedMeta = JSON.parse(insertCall?.[1]?.meta as string);
+    expect(savedMeta.pin).toBeDefined();
+    expect(savedMeta.pin).toMatch(/^[1-9][0-9]{5}$/);
+  });
+
+  it("rejects weak or malformed PINs with 400", async () => {
+    const result = await createEmailAddress({
+      env: {
+        EMAIL_DOMAINS: "spinupmail.com",
+      } as unknown as CloudflareBindings,
+      organizationId: "org-1",
+      session,
+      payload: {
+        localPart: "weak.inbox",
+        domain: "spinupmail.com",
+        acceptedRiskNotice: true,
+        meta: { pin: "12" }, // Too short (< 4 chars)
+      },
+    });
+
+    expect(result.status).toBe(400);
+    expect((result.body as any).error).toContain("PIN must be a string with at least 4 characters");
+  });
 });

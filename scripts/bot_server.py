@@ -585,6 +585,20 @@ class StartBotRequest(BaseModel):
             raise ValueError(f"{PROVIDER_INVALID}: Unknown proxy provider: '{v}'. Must be one of {allowed}")
         return (v or "psiphon").strip().lower()
 
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v):
+        allowed = {"clean_tempmail", "spinupmail"}
+        norm = (v or "clean_tempmail").strip().lower()
+        if norm not in allowed:
+            raise ValueError(f"Unknown provider: '{v}'. Must be one of {allowed}")
+        if norm == "spinupmail":
+            raise ValueError(
+                "Tạo email SpinupMail qua public endpoint ẩn danh không còn được hỗ trợ vì lý do bảo mật. "
+                "Vui lòng sử dụng Clean TempMail (clean_tempmail) hoặc quản lý hộp thư qua giao diện có xác thực."
+            )
+        return norm
+
     @field_validator("count")
     @classmethod
     def validate_count(cls, v):
@@ -666,28 +680,11 @@ async def poll_clean_otp(email: str, timeout_seconds: int = 75, route_spec: Opti
     raise TimeoutError("Hết thời gian chờ OTP từ Meta.")
 
 async def create_spinup_email(domain: str) -> tuple[str, str]:
-    add_log("Đang tạo email trên SpinupMail...", "info", 10)
-    req_data = json.dumps({
-        "count": 1,
-        "prefix": "muse",
-        "domain": domain
-    }).encode("utf-8")
-    
-    req = urllib.request.Request(
-        f"{BACKEND_URL}/api/public/bulk-create",
-        data=req_data,
-        headers={"Content-Type": "application/json"}
+    add_log("Tạo email SpinupMail qua public endpoint ẩn danh không còn được hỗ trợ vì lý do bảo mật.", "error")
+    raise NotImplementedError(
+        "Cổng tạo email SpinupMail công khai không xác thực (/api/public/bulk-create) đã được gỡ bỏ vì lý do an toàn bảo mật (A04). "
+        "Vui lòng sử dụng Clean TempMail (mặc định) hoặc quản lý hộp thư qua giao diện có xác thực."
     )
-    loop = asyncio.get_event_loop()
-    def _do_fetch():
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    res = await loop.run_in_executor(None, _do_fetch)
-    if res.get("ok") and res.get("items"):
-        item = res["items"][0]
-        add_log(f"Đã tạo email SpinupMail: {item['address']}", "success", 20)
-        return item["address"], item["pin"]
-    raise Exception(f"Không thể tạo email: {res}")
 
 async def poll_spinup_otp(email: str, pin: str, timeout_seconds: int = 75, route_spec: Optional[RouteSpec] = None) -> str:
     add_log("Đang chờ Meta gửi mã OTP xác thực...", "info", 50)
@@ -2074,6 +2071,7 @@ async def get_session_info():
     }
 
 SESSION_ID_REGEX = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+RESERVED_SESSION_ALIASES = frozenset({"latest", "current", "default", "all", "null", "undefined"})
 
 @app.get("/api/bot/export-session-csv")
 async def export_session_csv(session_id: Optional[str] = None):
@@ -2083,10 +2081,10 @@ async def export_session_csv(session_id: Optional[str] = None):
             status_code=404,
             detail="Không có phiên làm việc hiện tại hoặc chưa chọn mã phiên."
         )
-    if not SESSION_ID_REGEX.match(target_id):
+    if not SESSION_ID_REGEX.match(target_id) or target_id.lower() in RESERVED_SESSION_ALIASES:
         raise HTTPException(
             status_code=400,
-            detail="Mã phiên không hợp lệ. Chỉ chấp nhận ký tự a-z, A-Z, 0-9, gạch ngang và gạch dưới (tối đa 64 ký tự)."
+            detail=f"Mã phiên không hợp lệ hoặc thuộc từ khóa định danh phiên dành riêng ('{target_id}')."
         )
     file_path = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.csv")
     if not os.path.exists(file_path):
@@ -2108,10 +2106,10 @@ async def export_session_excel(session_id: Optional[str] = None):
             status_code=404,
             detail="Không có phiên làm việc hiện tại hoặc chưa chọn mã phiên."
         )
-    if not SESSION_ID_REGEX.match(target_id):
+    if not SESSION_ID_REGEX.match(target_id) or target_id.lower() in RESERVED_SESSION_ALIASES:
         raise HTTPException(
             status_code=400,
-            detail="Mã phiên không hợp lệ. Chỉ chấp nhận ký tự a-z, A-Z, 0-9, gạch ngang và gạch dưới (tối đa 64 ký tự)."
+            detail=f"Mã phiên không hợp lệ hoặc thuộc từ khóa định danh phiên dành riêng ('{target_id}')."
         )
     file_path = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.xlsx")
     if not os.path.exists(file_path):

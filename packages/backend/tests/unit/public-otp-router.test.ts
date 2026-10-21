@@ -21,7 +21,10 @@ import {
   extractOtpAndLinks,
   isAllowedMagicLinkHostname,
   _resetOtpRateLimitsForTesting,
+  _getMemoryRateLimitsSizeForTesting,
+  cleanupMemoryRateLimits,
 } from "@/modules/public-otp/router";
+import { generateSecurePin } from "@/shared/pin";
 import { createApp } from "@/index";
 
 describe("public-otp router security, isolation & contract (A01, A02, A04, A05)", () => {
@@ -226,7 +229,103 @@ describe("public-otp router security, isolation & contract (A01, A02, A04, A05)"
     expect(blockedRes.headers.get("Retry-After")).toBeDefined();
     const body = await blockedRes.json();
     expect(body.ok).toBe(false);
-    expect(body.error).toContain("vượt quá số lần thử");
+    expect(body.error).toContain("vượt quá giới hạn thử OTP");
+  });
+
+  it("Rate limit DO outage: fails closed with 429 when FIXED_WINDOW_RATE_LIMITERS throws", async () => {
+    const brokenDoEnv = {
+      FIXED_WINDOW_RATE_LIMITERS: {
+        idFromName: vi.fn().mockReturnValue("do-id-1"),
+        get: vi.fn().mockReturnValue({
+          consume: vi.fn().mockRejectedValue(new Error("DO_STORE_UNAVAILABLE")),
+        }),
+      },
+    } as unknown as AppHonoEnv["Bindings"];
+
+    const brokenApp = new Hono<AppHonoEnv>();
+    brokenApp.use("*", async (c, next) => {
+      c.env = brokenDoEnv;
+      await next();
+    });
+    brokenApp.route("/api/public", createPublicOtpRouter());
+
+    const res = await brokenApp.request(
+      "/api/public/otp?email=do-test@example.com&pin=123456"
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("60");
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+  });
+
+  it("Rate limit dual budget: independent mailbox protection blocks distributed attack across rotating IPs", async () => {
+    mocks.getDb.mockReturnValue({
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      }),
+    });
+
+    // 10 requests from 10 different IP addresses targeting the SAME mailbox
+    for (let i = 1; i <= 10; i++) {
+      const res = await app.request("/api/public/otp?email=victim@example.com&pin=123456", {
+        headers: { "cf-connecting-ip": `198.51.100.${i}` },
+      });
+      expect(res.status).toBe(404);
+    }
+
+    // 11th request from an 11th distinct IP must still be blocked by the mailbox budget
+    const blockedRes = await app.request("/api/public/otp?email=victim@example.com&pin=123456", {
+      headers: { "cf-connecting-ip": "198.51.100.99" },
+    });
+    expect(blockedRes.status).toBe(429);
+    const body = await blockedRes.json();
+    expect(body.error).toContain("Hộp thư đã vượt quá");
+  });
+
+  it("Rate limit dual budget: independent client IP protection blocks wide enumeration across distinct mailboxes", async () => {
+    mocks.getDb.mockReturnValue({
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      }),
+    });
+
+    const attackerIp = "203.0.113.88";
+    // 30 requests to 30 DIFFERENT mailboxes from the same IP
+    for (let i = 1; i <= 30; i++) {
+      const res = await app.request(`/api/public/otp?email=target${i}@example.com&pin=123456`, {
+        headers: { "cf-connecting-ip": attackerIp },
+      });
+      expect(res.status).toBe(404);
+    }
+
+    // 31st request to yet another mailbox must be blocked by IP budget
+    const blockedRes = await app.request("/api/public/otp?email=target31@example.com&pin=123456", {
+      headers: { "cf-connecting-ip": attackerIp },
+    });
+    expect(blockedRes.status).toBe(429);
+    const body = await blockedRes.json();
+    expect(body.error).toContain("Địa chỉ mạng đã vượt quá");
+  });
+
+  it("Rate limit memory cleanup: purges expired keys and bounds total memory entries", async () => {
+    for (let i = 0; i < 50; i++) {
+      await app.request(`/api/public/otp?email=expire${i}@example.com&pin=123456`, {
+        headers: { "cf-connecting-ip": `10.0.0.${i}` },
+      });
+    }
+    expect(_getMemoryRateLimitsSizeForTesting()).toBeGreaterThan(0);
+
+    // Fast-forward expiry
+    cleanupMemoryRateLimits(Date.now() + 70000);
+    expect(_getMemoryRateLimitsSizeForTesting()).toBe(0);
   });
 
   it("Mounted via createApp(): verifies routing and security through top-level application factory", async () => {
@@ -288,5 +387,32 @@ describe("extractOtpAndLinks hostname validation and phishing defense", () => {
     const res = extractOtpAndLinks("Mã đăng nhập", legitimateEmail, "");
     expect(res.otp).toBe("543210");
     expect(res.magicLink).toBe("https://auth.muse.ai/verify?token=secure-token-123");
+  });
+});
+
+describe("generateSecurePin CSPRNG requirement", () => {
+  it("generates a 6-digit numeric PIN with CSPRNG", () => {
+    const pin = generateSecurePin();
+    expect(pin).toMatch(/^[1-9][0-9]{5}$/);
+    expect(pin.length).toBe(6);
+  });
+
+  it("fails closed (throws) when CSPRNG is unavailable", () => {
+    const originalCrypto = globalThis.crypto;
+    try {
+      // Mock crypto without getRandomValues
+      Object.defineProperty(globalThis, "crypto", {
+        value: {},
+        configurable: true,
+        writable: true,
+      });
+      expect(() => generateSecurePin()).toThrow("CSPRNG_UNAVAILABLE");
+    } finally {
+      Object.defineProperty(globalThis, "crypto", {
+        value: originalCrypto,
+        configurable: true,
+        writable: true,
+      });
+    }
   });
 });

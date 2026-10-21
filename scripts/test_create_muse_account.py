@@ -15,22 +15,10 @@ except Exception:
 BACKEND_URL = "http://127.0.0.1:8787"
 
 def create_mail():
-    print("[1] Generating email on backend...")
-    req_data = json.dumps({
-        "count": 1,
-        "prefix": "muse_pro",
-        "domain": "maxxspace.com"
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        f"{BACKEND_URL}/api/public/bulk-create",
-        data=req_data,
-        headers={"Content-Type": "application/json"}
+    raise NotImplementedError(
+        "Cổng tạo email công khai ẩn danh (/api/public/bulk-create) đã bị gỡ bỏ theo khuyến nghị bảo mật A04. "
+        "Vui lòng quản lý hộp thư qua giao diện có xác thực hoặc sử dụng Clean TempMail."
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        res = json.loads(resp.read().decode("utf-8"))
-        item = res["items"][0]
-        print(f" -> Created email: {item['address']} (PIN: {item['pin']})")
-        return item["address"], item["pin"]
 
 def poll_otp(email, pin, timeout=90):
     print(f"[3] Polling for OTP from Meta for {email}...")

@@ -7,26 +7,10 @@ from playwright.sync_api import sync_playwright
 BACKEND_URL = "http://127.0.0.1:8787"
 
 def create_email():
-    print("[1/5] Creating new live email on backend...")
-    req_data = json.dumps({
-        "count": 1,
-        "prefix": "muse_auto",
-        "domain": "maxxspace.com"
-    }).encode("utf-8")
-    
-    req = urllib.request.Request(
-        f"{BACKEND_URL}/api/public/bulk-create",
-        data=req_data,
-        headers={"Content-Type": "application/json"}
+    raise NotImplementedError(
+        "Cổng tạo email công khai ẩn danh (/api/public/bulk-create) đã bị gỡ bỏ theo khuyến nghị bảo mật A04. "
+        "Vui lòng quản lý hộp thư qua giao diện có xác thực hoặc sử dụng Clean TempMail."
     )
-    with urllib.request.urlopen(req) as resp:
-        res = json.loads(resp.read().decode("utf-8"))
-        if res.get("ok") and res.get("items"):
-            item = res["items"][0]
-            print(f" -> Created email: {item['address']}, PIN: {item['pin']}")
-            return item["address"], item["pin"]
-        else:
-            raise Exception(f"Failed to create email: {res}")
 
 def wait_for_otp(email, pin, timeout_seconds=60):
     print(f"[3/5] Polling for OTP from Meta for {email}...")

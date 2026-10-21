@@ -13,6 +13,7 @@ import {
   getMaxAddressesPerOrganization,
   getMaxReceivedEmailsPerAddress,
 } from "@/shared/env";
+import { generateSecurePin } from "@/shared/pin";
 import { isAddressConflictError } from "@/shared/errors";
 import { deleteR2ObjectsByPrefix } from "@/shared/utils/r2";
 import {
@@ -579,6 +580,28 @@ export const createEmailAddress = async ({
       const p = JSON.parse(body.meta);
       if (p && typeof p === "object") rawMetaObj = { ...p };
     } catch {}
+  }
+
+  // Secure PIN provisioning & validation (Blocker 3 / P2)
+  if (
+    (body as Record<string, unknown>).generatePin === true ||
+    rawMetaObj.generatePin === true ||
+    rawMetaObj.pin === "auto"
+  ) {
+    rawMetaObj.pin = generateSecurePin();
+    delete rawMetaObj.generatePin;
+  }
+
+  if (rawMetaObj.pin !== undefined) {
+    if (typeof rawMetaObj.pin !== "string" || rawMetaObj.pin.trim().length < 4) {
+      return {
+        status: 400 as const,
+        body: {
+          error: "PIN must be a string with at least 4 characters",
+        },
+      };
+    }
+    rawMetaObj.pin = rawMetaObj.pin.trim();
   }
 
   const baseMeta = buildAddressMetaForStorage(rawMetaObj, {

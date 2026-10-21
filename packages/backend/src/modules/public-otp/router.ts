@@ -27,10 +27,32 @@ export const isAllowedMagicLinkHostname = (hostname: string): boolean => {
   );
 };
 
+export const MAX_MEMORY_RATE_LIMIT_ENTRIES = 10000;
 const memoryRateLimits = new Map<string, { count: number; resetAtMs: number }>();
 
 export const _resetOtpRateLimitsForTesting = () => {
   memoryRateLimits.clear();
+};
+
+export const _getMemoryRateLimitsSizeForTesting = () => {
+  return memoryRateLimits.size;
+};
+
+export const cleanupMemoryRateLimits = (now: number = Date.now()) => {
+  for (const [key, entry] of memoryRateLimits.entries()) {
+    if (entry.resetAtMs <= now) {
+      memoryRateLimits.delete(key);
+    }
+  }
+  if (memoryRateLimits.size >= MAX_MEMORY_RATE_LIMIT_ENTRIES) {
+    const excess = memoryRateLimits.size - MAX_MEMORY_RATE_LIMIT_ENTRIES + 100;
+    let deleted = 0;
+    for (const key of memoryRateLimits.keys()) {
+      memoryRateLimits.delete(key);
+      deleted++;
+      if (deleted >= excess) break;
+    }
+  }
 };
 
 export const checkOtpRateLimit = async (
@@ -48,10 +70,15 @@ export const checkOtpRateLimit = async (
         maxAttempts,
       });
       return res;
-    } catch {}
+    } catch {
+      // Fail-closed on Durable Object store outage / failure in distributed environment
+      return { allowed: false, retryAfterSeconds: 60 };
+    }
   }
 
   const now = Date.now();
+  cleanupMemoryRateLimits(now);
+
   const entry = memoryRateLimits.get(clientKey);
   if (!entry || entry.resetAtMs <= now) {
     memoryRateLimits.set(clientKey, {
@@ -180,19 +207,33 @@ export const createPublicOtpRouter = () => {
 
     const email = rawEmail.trim().toLowerCase();
 
-    // Rate limiting per IP / email to prevent brute-forcing PINs
+    // Rate limiting: Dual-budget protection
+    // 1. Mailbox budget (10 req/min): protects target mailbox from distributed brute force
+    // 2. Client IP budget (30 req/min): protects against wide credential-stuffing/address enumeration
     const clientIp =
       c.req.header("cf-connecting-ip") ||
       c.req.header("x-forwarded-for") ||
       "127.0.0.1";
-    const rateLimitKey = `${clientIp}:${email}`;
-    const rateLimit = await checkOtpRateLimit(c.env, rateLimitKey, 10, 60);
-    if (!rateLimit.allowed) {
-      c.header("Retry-After", String(rateLimit.retryAfterSeconds ?? 60));
+
+    const mailboxLimit = await checkOtpRateLimit(c.env, `mail:${email}`, 10, 60);
+    if (!mailboxLimit.allowed) {
+      c.header("Retry-After", String(mailboxLimit.retryAfterSeconds ?? 60));
       return c.json(
         {
           ok: false,
-          error: "Đã vượt quá số lần thử lấy OTP. Vui lòng thử lại sau.",
+          error: "Hộp thư đã vượt quá giới hạn thử OTP. Vui lòng thử lại sau.",
+        },
+        429
+      );
+    }
+
+    const ipLimit = await checkOtpRateLimit(c.env, `ip:${clientIp}`, 30, 60);
+    if (!ipLimit.allowed) {
+      c.header("Retry-After", String(ipLimit.retryAfterSeconds ?? 60));
+      return c.json(
+        {
+          ok: false,
+          error: "Địa chỉ mạng đã vượt quá giới hạn thử OTP. Vui lòng thử lại sau.",
         },
         429
       );
