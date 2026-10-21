@@ -580,9 +580,6 @@ export const createEmailAddress = async ({
       if (p && typeof p === "object") rawMetaObj = { ...p };
     } catch {}
   }
-  if (!rawMetaObj.pin) {
-    rawMetaObj.pin = Math.floor(100000 + Math.random() * 900000).toString();
-  }
 
   const baseMeta = buildAddressMetaForStorage(rawMetaObj, {
     allowedFromDomains,

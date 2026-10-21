@@ -6,7 +6,6 @@ import {
   getMaxReceivedEmailCountFromMeta,
   parseAddressMeta,
 } from "@/shared/validation";
-import { getOrDerivePin } from "@/modules/public-otp/router";
 import type { AddressIntegration } from "@spinupmail/contracts";
 
 export const toEmailAddressListItem = (row: {
@@ -22,7 +21,6 @@ export const toEmailAddressListItem = (row: {
   lastReceivedAt: Date | null;
 }) => {
   const parsedMeta = parseAddressMeta(row.meta);
-  const otpPin = getOrDerivePin(parsedMeta, row.id);
   const allowedFromDomains = getAllowedFromDomainsFromMeta(parsedMeta);
   const blockedSenderDomains = getBlockedSenderDomainsFromMeta(parsedMeta);
   const inboundRatePolicy = getInboundRatePolicyFromMeta(parsedMeta);
@@ -38,7 +36,6 @@ export const toEmailAddressListItem = (row: {
     localPart: row.localPart,
     domain: row.domain,
     meta: parsedMeta,
-    otpPin,
     emailCount: row.emailCount,
     allowedFromDomains,
     blockedSenderDomains,

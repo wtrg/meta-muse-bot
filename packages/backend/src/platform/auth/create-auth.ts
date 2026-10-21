@@ -266,8 +266,7 @@ function createAuth(
     },
     plugins: [
       ...(enableE2ETestUtils ? [testUtils()] : []),
-      ...(env?.TURNSTILE_SECRET_KEY &&
-      env.TURNSTILE_SECRET_KEY !== "1x0000000000000000000000000000000AA"
+      ...(env?.TURNSTILE_SECRET_KEY
         ? [
             captcha({
               provider: "cloudflare-turnstile",

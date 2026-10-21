@@ -3,17 +3,56 @@ import asyncio
 from playwright.async_api import async_playwright, Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
 from muse_access import inspect_muse_access
 
+import os
+
 _sessions = {}
+
+
+def get_preferred_browser_channel():
+    edge_paths = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+    ]
+    if any(os.path.exists(p) for p in edge_paths):
+        return "msedge"
+    chrome_paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expanduser(r"~\AppData\Local\Google\Chrome\Application\chrome.exe")
+    ]
+    if any(os.path.exists(p) for p in chrome_paths):
+        return "chrome"
+    return None
 
 
 async def open_muse_browser(proxy, cookies=None, verify_access=False):
     runtime = await async_playwright().start()
     browser = None
     try:
-        browser = await runtime.chromium.launch(
-            channel="chrome", headless=False, proxy=proxy,
+        channel_to_use = get_preferred_browser_channel()
+        launch_kwargs = {
+            "headless": False,
+            "proxy": proxy,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--no-default-browser-check",
+                "--no-first-run"
+            ]
+        }
+        if channel_to_use:
+            launch_kwargs["channel"] = channel_to_use
+        browser = await runtime.chromium.launch(**launch_kwargs)
+        context = await browser.new_context(
+            locale="en-US",
+            timezone_id="America/New_York"
         )
-        context = await browser.new_context()
+        if hasattr(context, "add_init_script") and callable(getattr(context, "add_init_script")):
+            try:
+                res = context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception:
+                pass
         if cookies:
             await context.add_cookies(cookies)
         page = await context.new_page()

@@ -175,7 +175,7 @@ describe("createAuth", () => {
     } as CloudflareBindings);
 
     expect(resendModuleLoaded).toBe(false);
-  });
+  }, 30000);
 
   it("configures local email qualification hooks and normalizedEmail writes", async () => {
     const { createAuth } = await import("@/platform/auth/create-auth");

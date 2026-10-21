@@ -75,3 +75,24 @@ scripts/fast_us_proxies.json
 scripts/live_us_proxies.json
 
 reports/
+
+# profiles & browser session storage
+profiles/
+test_edge_p/
+
+# scratch automation, fb pool & inspection scripts
+scripts/fb_dump.html
+scripts/fb_account_creator.py
+scripts/fb_pool.py
+scripts/fb_pool_config.json
+mo_fb_profile_*.bat
+scripts/inspect_fb_*.py
+scripts/test_fb_*.py
+scripts/test_cb_*.py
+scripts/parse_fb.py
+scripts/parse_labels.py
+scripts/test_full_fb_keys.py
+scripts/test_muse_form.py
+patch_muse_v5_g0_g5.diff
+ROUND_1_REVIEW_PACKET.md
+

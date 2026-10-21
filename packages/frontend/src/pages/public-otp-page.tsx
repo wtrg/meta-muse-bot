@@ -28,6 +28,16 @@ type OtpResult = {
   isLocalDevDomain?: boolean;
 };
 
+const isSafeHttpUrl = (url?: string | null): boolean => {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+};
+
 export const PublicOtpPage = () => {
   const [searchParams] = useSearchParams();
   const urlEmail = searchParams.get("email") || searchParams.get("mail") || "";
@@ -297,15 +307,15 @@ export const PublicOtpPage = () => {
                   )}
 
                   {/* Magic Link / Direct Confirmation Link */}
-                  {data.latest?.magicLink && (
+                  {isSafeHttpUrl(data.latest?.magicLink) && (
                     <div className="p-3.5 rounded-lg border border-blue-500/30 bg-blue-500/10 space-y-2 text-center">
                       <p className="text-xs font-medium text-blue-600 dark:text-blue-400">
                         🔗 Phát hiện đường link xác thực Muse.ai:
                       </p>
                       <a
-                        href={data.latest.magicLink}
+                        href={data.latest!.magicLink!}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                         className="inline-block w-full sm:w-auto px-4 py-2 rounded-md bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-colors"
                       >
                         Mở link kích hoạt tài khoản Muse.ai ↗
@@ -325,13 +335,7 @@ export const PublicOtpPage = () => {
 
                     {showBody && (
                       <div className="mt-3 p-3 rounded-md bg-muted/50 border border-border/60 text-xs text-foreground font-mono whitespace-pre-wrap max-h-72 overflow-y-auto">
-                        {data.latest?.bodyText || (
-                          <div
-                            dangerouslySetInnerHTML={{
-                              __html: data.latest?.bodyHtml || "(Không có nội dung)",
-                            }}
-                          />
-                        )}
+                        {data.latest?.bodyText || (data.latest?.bodyHtml ? data.latest.bodyHtml.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ").replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").trim() : "(Không có nội dung)")}
                       </div>
                     )}
                   </div>

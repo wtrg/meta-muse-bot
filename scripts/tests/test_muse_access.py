@@ -33,7 +33,7 @@ class AccessTests(unittest.TestCase):
         tile.click.assert_awaited_once()
     def test_batch_stops_on_access_failure_and_zero_is_error(self):
         request=bot.StartBotRequest(count=3,proxyType="vpn")
-        with patch.object(bot,"process_single_account",new_callable=AsyncMock,side_effect=MuseAccessError("LOGIN_REQUIRED","Login incomplete")) as register, patch.object(bot,"add_log") as log, patch.object(bot,"save_session_csv_and_excel"):
+        with patch.object(bot,"resolve_provider_route",return_value={"ok": True, "provider": "vpn", "proxy": None, "networkMode": "system"}), patch.object(bot,"process_single_account",new_callable=AsyncMock,side_effect=MuseAccessError("LOGIN_REQUIRED","Login incomplete")) as register, patch.object(bot,"add_log") as log, patch.object(bot,"save_session_csv_and_excel"):
             asyncio.run(bot.bot_worker(request))
             register.assert_awaited_once()
             self.assertEqual(log.call_args.args[1],"error")

@@ -34,6 +34,8 @@ import {
 type ProxyHealth = {
   ok: boolean;
   is_us?: boolean;
+  is_ca?: boolean;
+  country_code?: string;
   verdict?: "US_RESIDENTIAL" | "US_DATACENTER" | "CA_ROUTE" | "NON_US" | string;
   verdict_text?: string;
   error?: string;
@@ -91,6 +93,18 @@ type SessionInfo = {
   hasSession: boolean;
 };
 
+type BotRuntimeInfo = {
+  ok: boolean;
+  build_sha?: string;
+  worktree_dirty?: boolean;
+  worktree_patch_digest?: string;
+  pid?: number;
+  python_executable?: string;
+  port?: number;
+  started_at_utc?: string;
+  network_revision?: string;
+};
+
 export const MuseBotPage = () => {
   const [count, setCount] = React.useState(1);
   const [isOpeningFreeMuse, setIsOpeningFreeMuse] = React.useState(false);
@@ -99,12 +113,16 @@ export const MuseBotPage = () => {
   const [proxyType, setProxyType] = React.useState<"psiphon" | "vpn" | "custom" | "auto" | "windscribe">("psiphon");
   const [customProxy, setCustomProxy] = React.useState("");
   const [activeProxyInfo, setActiveProxyInfo] = React.useState<{ proxy: string; isp: string; region: string } | null>(null);
-  const [inviteCode, setInviteCode] = React.useState("");
+  const [inviteCode, setInviteCode] = React.useState("P3FB4N");
+
   const [isScanningProxy, setIsScanningProxy] = React.useState(false);
   const [psiphonStatus, setPsiphonStatus] = React.useState<{ running: boolean; info?: any } | null>(null);
   const [isTogglingPsiphon, setIsTogglingPsiphon] = React.useState(false);
   const [visible, setVisible] = React.useState(true);
   const [selectedScreenshot, setSelectedScreenshot] = React.useState<string | null>(null);
+
+  const [runtimeInfo, setRuntimeInfo] = React.useState<BotRuntimeInfo | null>(null);
+  const [runtimeError, setRuntimeError] = React.useState<boolean>(false);
 
   const [isRunning, setIsRunning] = React.useState(false);
   const [currentStep, setCurrentStep] = React.useState("Sẵn sàng");
@@ -117,6 +135,23 @@ export const MuseBotPage = () => {
   );
 
   const consoleEndRef = React.useRef<HTMLDivElement>(null);
+
+  const fetchRuntime = React.useCallback(async () => {
+    try {
+      const res = await fetch("/api/bot/runtime");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ok) {
+          setRuntimeInfo(data);
+          setRuntimeError(false);
+          return;
+        }
+      }
+      setRuntimeError(true);
+    } catch {
+      setRuntimeError(true);
+    }
+  }, []);
 
   const fetchPsiphonStatus = React.useCallback(async () => {
     try {
@@ -227,6 +262,67 @@ export const MuseBotPage = () => {
     }
   };
 
+  interface DiagnoseResult {
+    ok: boolean;
+    provider?: string;
+    mode?: string;
+    host_probe?: { ip: string; country: string; is_us: boolean; is_ca: boolean; isp: string } | null;
+    browser_probe?: { ip: string; country: string; is_us: boolean; is_ca: boolean; isp: string } | null;
+    route_match?: boolean;
+    muse_rendered_state?: { status: string; message: string; url: string } | null;
+    error?: string | null;
+    timestamp_utc?: string;
+  }
+
+  const [diagnoseResult, setDiagnoseResult] = React.useState<DiagnoseResult | null>(null);
+  const [isDiagnosing, setIsDiagnosing] = React.useState(false);
+
+  const handleDiagnoseRoute = async () => {
+    try {
+      setIsDiagnosing(true);
+      toast.info("Đang chẩn đoán tuyến mạng T0 (Host) và T1 (Browser)...");
+      let proxyValue: string | null = null;
+      if (proxyType === "auto") {
+        proxyValue = activeProxyInfo?.proxy || null;
+      } else if (proxyType === "custom") {
+        proxyValue = customProxy.trim() || null;
+      }
+      const res = await fetch("/api/bot/diagnose-route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proxyType, proxy: proxyValue })
+      });
+      const data: DiagnoseResult = await res.json();
+      if (!res.ok) {
+        const detailMsg = (data as unknown as { detail?: string }).detail;
+        const errorText = data.error || (detailMsg ? `Lỗi dịch vụ (${res.status}): ${detailMsg}` : `HTTP ${res.status}: ${res.statusText || "Lỗi yêu cầu chẩn đoán"}`);
+        setDiagnoseResult({
+          ok: false,
+          provider: proxyType,
+          error: errorText
+        });
+        toast.error(`Chẩn đoán thất bại: ${errorText}`);
+        return;
+      }
+      setDiagnoseResult(data);
+      if (data.ok) {
+        toast.success(`Chẩn đoán hoàn tất: Tuyến mạng ${data.browser_probe?.country || "đo được"} khớp chuẩn!`);
+      } else {
+        toast.warning(data.error || "Chẩn đoán hoàn tất: Tuyến mạng chưa đạt chuẩn hoặc bị từ chối.");
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Lỗi kết nối khi chẩn đoán";
+      setDiagnoseResult({
+        ok: false,
+        provider: proxyType,
+        error: errMsg
+      });
+      toast.error(`Lỗi khi chẩn đoán: ${errMsg}`);
+    } finally {
+      setIsDiagnosing(false);
+    }
+  };
+
   // Poll bot status and accounts
   const fetchStatus = React.useCallback(async () => {
     try {
@@ -278,7 +374,10 @@ export const MuseBotPage = () => {
     }
   }, []);
 
+
+
   React.useEffect(() => {
+    fetchRuntime();
     fetchStatus();
     fetchAccounts();
     fetchSession();
@@ -292,13 +391,14 @@ export const MuseBotPage = () => {
       })
       .catch(() => {});
     const interval = setInterval(() => {
+      fetchRuntime();
       fetchStatus();
       fetchAccounts();
       fetchSession();
       fetchPsiphonStatus();
-    }, 2000);
+      }, 2000);
     return () => clearInterval(interval);
-  }, [fetchStatus, fetchAccounts, fetchSession, fetchPsiphonStatus]);
+  }, [fetchRuntime, fetchStatus, fetchAccounts, fetchSession, fetchPsiphonStatus]);
 
   // Auto scroll console only inside its container
   React.useEffect(() => {
@@ -310,8 +410,8 @@ export const MuseBotPage = () => {
   const handleStartBot = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     try {
-      if (proxyType === "vpn" && proxyHealth && !proxyHealth.is_us) {
-        toast.error(`Máy tính chưa bật VPN USA (Hiện tại là IP ${proxyHealth.data?.query || "Việt Nam"}). Vui lòng bật VPN USA trước khi tạo để không bị đưa vào Danh Sách Chờ!`);
+      if (proxyType === "vpn" && proxyHealth && !proxyHealth.is_us && !proxyHealth.is_ca) {
+        toast.error(proxyHealth.verdict_text || `Tuyến mạng hiện tại (${proxyHealth.data?.countryCode || "khác"}) không thuộc Hoa Kỳ/Canada.`);
         return;
       }
 
@@ -351,9 +451,19 @@ export const MuseBotPage = () => {
 
   const handleOpenFreeMuse = async () => {
     setIsOpeningFreeMuse(true);
-    setFreeMuseMessage("Đang tự kết nối đường hầm và mở Muse...");
+    setFreeMuseMessage("Đang kết nối qua tuyến mạng đã chọn và mở Muse...");
     try {
-      const res = await fetch("/api/bot/open-muse", { method: "POST" });
+      let proxyValue: string | null = null;
+      if (proxyType === "auto") {
+        proxyValue = activeProxyInfo?.proxy || null;
+      } else if (proxyType === "custom") {
+        proxyValue = customProxy.trim() || null;
+      }
+      const res = await fetch("/api/bot/open-muse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: proxyType, proxy: proxyValue })
+      });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.detail || "Không mở được Muse");
       setFreeMuseMessage(data.message);
@@ -437,6 +547,22 @@ export const MuseBotPage = () => {
                 <Badge variant="outline" className="border-violet-500/40 text-violet-500 bg-violet-500/10 text-[10px] px-1.5 py-0">
                   Bot Tự Động
                 </Badge>
+                {runtimeInfo ? (
+                  <div className="flex items-center gap-1.5 ml-1">
+                    <Badge variant="outline" className="border-blue-500/40 text-blue-500 bg-blue-500/10 text-[10px] px-1.5 py-0 font-mono">
+                      Rev: {runtimeInfo.build_sha?.slice(0, 7)} | PID: {runtimeInfo.pid}
+                    </Badge>
+                    {runtimeInfo.worktree_dirty && (
+                      <Badge variant="outline" className="border-amber-500/40 text-amber-500 bg-amber-500/10 text-[10px] px-1.5 py-0 font-mono" title={`Patch: ${runtimeInfo.worktree_patch_digest}`}>
+                        DIRTY
+                      </Badge>
+                    )}
+                  </div>
+                ) : runtimeError ? (
+                  <Badge variant="outline" className="border-red-500/40 text-red-500 bg-red-500/10 text-[10px] px-1.5 py-0">
+                    Runtime Unreachable
+                  </Badge>
+                ) : null}
               </div>
               <div className="text-xs text-muted-foreground">
                 Tự Reg Mail ➔ Bắt OTP Meta ➔ Điền Ngày Sinh ➔ Đăng Nhập
@@ -712,10 +838,10 @@ export const MuseBotPage = () => {
                       >
                         <div className="font-semibold text-xs flex items-center gap-1">
                           <ShieldCheck className="size-3.5 text-violet-500 shrink-0" />
-                          VPN Máy
+                          VPN Máy (Urban VPN)
                         </div>
                         <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight">
-                          WARP / VPN trên máy
+                          Bật Urban VPN chọn mục này
                         </div>
                       </button>
 
@@ -875,6 +1001,23 @@ export const MuseBotPage = () => {
                       </div>
                     )}
 
+                    {proxyType === "vpn" && (
+                      <div className="p-3 rounded-lg border border-violet-500/30 bg-violet-500/5 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-violet-700 dark:text-violet-300 flex items-center gap-1.5">
+                            <ShieldCheck className="size-3.5 text-violet-500 shrink-0" />
+                            Đường Tuyến VPN Máy Thật (Urban VPN / Desktop VPN)
+                          </span>
+                          <span className="text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold px-2 py-0.5 rounded">
+                            Tương thích Urban VPN
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground leading-relaxed">
+                          Bật app <strong>Urban VPN</strong> (chọn vị trí <strong>United States</strong>) trên máy tính trước. Tool sẽ sử dụng trực tiếp tuyến mạng IP Dân Cư này kết hợp cùng trình duyệt <strong>Microsoft Edge</strong> (chế độ ẩn danh chống Bot) để tạo tài khoản, giảm thiểu tối đa nguy cơ bị Meta đưa vào Danh Sách Chờ.
+                        </p>
+                      </div>
+                    )}
+
                     {proxyType === "custom" && (
                       <div className="space-y-1.5 pt-1">
                         <Label className="text-[11px] text-muted-foreground">
@@ -897,17 +1040,30 @@ export const MuseBotPage = () => {
                           <Activity className="size-3.5 text-violet-500" />
                           Trạng Thái Tuyến Mạng / IP Thoát
                         </span>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={handleCheckProxyHealth}
-                          disabled={isCheckingHealth || isRunning}
-                          className="h-7 text-xs px-2.5 font-medium"
-                        >
-                          <RefreshCw className={`size-3 mr-1.5 ${isCheckingHealth ? "animate-spin" : ""}`} />
-                          {isCheckingHealth ? "Đang kiểm tra..." : "Kiểm Tra IP Ngay"}
-                        </Button>
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={handleCheckProxyHealth}
+                            disabled={isCheckingHealth || isRunning}
+                            className="h-7 text-xs px-2 font-medium"
+                          >
+                            <RefreshCw className={`size-3 mr-1 ${isCheckingHealth ? "animate-spin" : ""}`} />
+                            {isCheckingHealth ? "Kiểm tra..." : "Kiểm Tra IP"}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={handleDiagnoseRoute}
+                            disabled={isDiagnosing || isRunning}
+                            className="h-7 text-xs px-2 font-medium border-violet-500/40 text-violet-600 dark:text-violet-400 hover:bg-violet-500/10"
+                          >
+                            <Activity className={`size-3 mr-1 ${isDiagnosing ? "animate-spin" : ""}`} />
+                            {isDiagnosing ? "Chẩn đoán..." : "Chẩn Đoán Tuyến Mạng"}
+                          </Button>
+                        </div>
                       </div>
 
                       {proxyHealth ? (
@@ -951,7 +1107,51 @@ export const MuseBotPage = () => {
                         </div>
                       ) : (
                         <div className="p-2 rounded bg-muted/40 text-[11px] text-muted-foreground flex items-center justify-between">
-                          <span>Chưa kiểm tra. Bấm "Kiểm Tra IP Ngay" để xác thực chuẩn US trước khi chạy.</span>
+                          <span>Chưa kiểm tra. Bấm "Kiểm Tra IP" hoặc "Chẩn Đoán Tuyến Mạng" để xác thực.</span>
+                        </div>
+                      )}
+
+                      {diagnoseResult && (
+                        <div className="p-2.5 rounded-lg border border-border/80 bg-background/80 text-xs space-y-2 mt-2">
+                          <div className="flex items-center justify-between font-semibold">
+                            <span className="flex items-center gap-1.5 text-foreground">
+                              <ShieldCheck className="size-4 text-violet-500" />
+                              Kết Quả Chẩn Đoán Tuyến Mạng (T0 / T1)
+                            </span>
+                            <Badge variant={diagnoseResult.ok ? "default" : "destructive"} className="text-[10px]">
+                              {diagnoseResult.ok ? "KHỚP CHUẨN" : "CẦN LƯU Ý"}
+                            </Badge>
+                          </div>
+                          
+                          {diagnoseResult.error && (
+                            <div className="p-2 rounded bg-destructive/10 border border-destructive/30 text-destructive text-[11px] font-semibold flex items-start gap-1.5">
+                              <XCircle className="size-4 shrink-0 mt-0.5" />
+                              <span>{diagnoseResult.error}</span>
+                            </div>
+                          )}
+
+                          <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                            <div className="p-2 rounded bg-muted/30 border border-border/40">
+                              <div className="font-sans font-semibold text-muted-foreground mb-1">T0 (Host Exit)</div>
+                              <div>IP: <span className="text-foreground">{diagnoseResult.host_probe?.ip || "N/A"}</span></div>
+                              <div>Quốc gia: <span className="text-foreground">{diagnoseResult.host_probe?.country || "N/A"}</span></div>
+                              <div className="truncate">ISP: <span className="text-foreground">{diagnoseResult.host_probe?.isp || "N/A"}</span></div>
+                            </div>
+                            <div className="p-2 rounded bg-muted/30 border border-border/40">
+                              <div className="font-sans font-semibold text-muted-foreground mb-1">T1 (Browser Exit)</div>
+                              <div>IP: <span className="text-foreground">{diagnoseResult.browser_probe?.ip || "N/A"}</span></div>
+                              <div>Quốc gia: <span className="text-foreground">{diagnoseResult.browser_probe?.country || "N/A"}</span></div>
+                              <div className="truncate">ISP: <span className="text-foreground">{diagnoseResult.browser_probe?.isp || "N/A"}</span></div>
+                            </div>
+                          </div>
+
+                          {diagnoseResult.muse_rendered_state && (
+                            <div className="p-2 rounded bg-muted/20 border border-border/40 text-[11px]">
+                              <span className="font-semibold text-muted-foreground">Quan sát Muse Landing (Chưa đăng ký): </span>
+                              <span className="font-mono text-foreground font-semibold">{diagnoseResult.muse_rendered_state.status}</span>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">{diagnoseResult.muse_rendered_state.message}</p>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1000,6 +1200,9 @@ export const MuseBotPage = () => {
                       🎯 <strong>Quy đổi mã:</strong> Mã mời (nếu có) chỉ được gửi quy đổi trong Cài đặt sau khi tài khoản vào màn hình Chat thành công. Để trống nếu không dùng mã.
                     </p>
                   </div>
+
+
+
 
                   {/* Browser Visibility */}
                   <div className="pt-2 border-t border-border/50 flex items-center justify-between">
@@ -1274,7 +1477,7 @@ export const MuseBotPage = () => {
                       </thead>
                       <tbody className="divide-y divide-border/60">
                         {accounts.map((acc, idx) => {
-                          const pin = acc.otp || acc.pin || "";
+                          const pin = acc.pin || "";
                           const clientOtpUrl = `${tunnelUrl}/otp?email=${encodeURIComponent(acc.email)}`;
                           return (
                             <tr key={acc.id} className="hover:bg-muted/30 transition-colors">
