@@ -102,6 +102,7 @@ export const createEmailAddressBodySchema = z
       .max(ADDRESS_TTL_MAX_MINUTES)
       .optional(),
     meta: z.unknown().optional(),
+    generatePin: z.boolean().optional(),
     domain: z.string().optional(),
     allowedFromDomains: z
       .union([allowedFromDomainsSchema, z.string()])

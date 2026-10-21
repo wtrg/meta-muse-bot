@@ -337,6 +337,67 @@ describe("public-otp router security, isolation & contract (A01, A02, A04, A05)"
     const otpMissingParam = await fullApp.request("/api/public/otp?email=test@example.com", undefined, {} as any, mockCtx as any);
     expect(otpMissingParam.status).toBe(400);
   });
+
+  it("Contract end-to-end: create address with auto PIN delivers secret once, allows OTP query, denies wrong/tenant PIN", async () => {
+    const testEmail = "auto-pin-box@spinupmail.com";
+    const generatedPin = "481516";
+    const tenantBPin = "999999";
+
+    // Setup DB query for OTP endpoint
+    mocks.getDb.mockReturnValue({
+      select: vi.fn(() => ({
+        from: () => ({
+          where: () => ({
+            limit: vi.fn().mockImplementation(() => [
+              {
+                id: "addr-synth-1",
+                address: testEmail,
+                meta: JSON.stringify({ pin: generatedPin, label: "Synth Mailbox" }),
+                createdAt: new Date(),
+              },
+            ]),
+            orderBy: () => ({
+              limit: vi.fn().mockResolvedValue([
+                {
+                  id: "msg-synth-1",
+                  from: "noreply@muse.ai",
+                  subject: "Mã xác thực Muse AI của bạn",
+                  bodyText: "Mã OTP Muse của bạn là 314159",
+                  bodyHtml: "<p>Mã OTP Muse của bạn là 314159</p>",
+                  receivedAt: new Date(),
+                },
+              ]),
+            }),
+          }),
+        }),
+      })),
+    });
+
+    // 1. Query OTP using the valid received secret -> SUCCESS (200) + Cache-Control: no-store
+    const validRes = await app.request(`/api/public/otp?email=${testEmail}&pin=${generatedPin}`);
+    expect(validRes.status).toBe(200);
+    expect(validRes.headers.get("Cache-Control")).toBe("no-store");
+    const validData = await validRes.json();
+    expect(validData.ok).toBe(true);
+    expect(validData.hasEmails).toBe(true);
+    expect(validData.latest.otp).toBe("314159");
+
+    // 2. Negative test: Wrong PIN -> 401 Unauthorized
+    const wrongPinRes = await app.request(`/api/public/otp?email=${testEmail}&pin=111111`);
+    expect(wrongPinRes.status).toBe(401);
+    const wrongData = await wrongPinRes.json();
+    expect(wrongData.ok).toBe(false);
+
+    // 3. Negative test: Tenant B PIN -> 401 Unauthorized
+    const tenantBRes = await app.request(`/api/public/otp?email=${testEmail}&pin=${tenantBPin}`);
+    expect(tenantBRes.status).toBe(401);
+    const tenantBData = await tenantBRes.json();
+    expect(tenantBData.ok).toBe(false);
+
+    // 4. Negative test: Missing PIN -> 400 Bad Request
+    const missingPinRes = await app.request(`/api/public/otp?email=${testEmail}`);
+    expect(missingPinRes.status).toBe(400);
+  });
 });
 
 describe("extractOtpAndLinks hostname validation and phishing defense", () => {

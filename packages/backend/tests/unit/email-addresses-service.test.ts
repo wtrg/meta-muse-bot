@@ -1116,6 +1116,36 @@ describe("email addresses service", () => {
     const savedMeta = JSON.parse(insertCall?.[1]?.meta as string);
     expect(savedMeta.pin).toBeDefined();
     expect(savedMeta.pin).toMatch(/^[1-9][0-9]{5}$/);
+
+    // One-time PIN delivery in creation response
+    const body = result.body as Record<string, unknown>;
+    expect(body.pin).toBe(savedMeta.pin);
+    expect(JSON.stringify(result.body).includes(savedMeta.pin)).toBe(true);
+    // Preserves PIN redaction from meta object
+    expect((body.meta as Record<string, unknown> | undefined)?.pin).toBeUndefined();
+  });
+
+  it("provisions secure PIN when top-level generatePin is true on payload", async () => {
+    const result = await createEmailAddress({
+      env: {
+        EMAIL_DOMAINS: "spinupmail.com",
+      } as unknown as CloudflareBindings,
+      organizationId: "org-1",
+      session,
+      payload: {
+        localPart: "toplevel.inbox",
+        domain: "spinupmail.com",
+        acceptedRiskNotice: true,
+        generatePin: true,
+      },
+    });
+
+    expect(result.status).toBe(200);
+    const insertCall = mocks.insertAddress.mock.calls[0];
+    const savedMeta = JSON.parse(insertCall?.[1]?.meta as string);
+    expect(savedMeta.pin).toBeDefined();
+    expect((result.body as Record<string, unknown>).pin).toBe(savedMeta.pin);
+    expect(JSON.stringify(result.body).includes(savedMeta.pin)).toBe(true);
   });
 
   it("rejects weak or malformed PINs with 400", async () => {

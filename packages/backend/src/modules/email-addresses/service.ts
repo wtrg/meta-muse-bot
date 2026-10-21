@@ -584,7 +584,7 @@ export const createEmailAddress = async ({
 
   // Secure PIN provisioning & validation (Blocker 3 / P2)
   if (
-    (body as Record<string, unknown>).generatePin === true ||
+    body.generatePin === true ||
     rawMetaObj.generatePin === true ||
     rawMetaObj.pin === "auto"
   ) {
@@ -603,6 +603,9 @@ export const createEmailAddress = async ({
     }
     rawMetaObj.pin = rawMetaObj.pin.trim();
   }
+
+  const provisionedPin: string | undefined =
+    typeof rawMetaObj.pin === "string" ? rawMetaObj.pin : undefined;
 
   const baseMeta = buildAddressMetaForStorage(rawMetaObj, {
     allowedFromDomains,
@@ -728,23 +731,28 @@ export const createEmailAddress = async ({
     addressIds: [id],
   });
 
+  const item = toEmailAddressListItem({
+    id,
+    address,
+    localPart,
+    domain,
+    meta:
+      responseMeta === undefined
+        ? null
+        : JSON.stringify(responseMeta ?? null),
+    integrations: integrationsByAddressId.get(id) ?? [],
+    emailCount: 0,
+    createdAt: new Date(now),
+    expiresAt: expiresAt ?? null,
+    lastReceivedAt: null,
+  });
+
   return {
     status: 200 as const,
-    body: toEmailAddressListItem({
-      id,
-      address,
-      localPart,
-      domain,
-      meta:
-        responseMeta === undefined
-          ? null
-          : JSON.stringify(responseMeta ?? null),
-      integrations: integrationsByAddressId.get(id) ?? [],
-      emailCount: 0,
-      createdAt: new Date(now),
-      expiresAt: expiresAt ?? null,
-      lastReceivedAt: null,
-    }),
+    body: {
+      ...item,
+      ...(provisionedPin ? { pin: provisionedPin } : {}),
+    },
   };
 };
 

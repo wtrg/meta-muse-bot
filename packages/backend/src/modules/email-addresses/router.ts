@@ -73,7 +73,7 @@ export const createEmailAddressesRouter = () => {
       });
 
       return c.json(result.body, result.status, {
-        "Cache-Control": "private, max-age=15",
+        "Cache-Control": "no-store",
       });
     }
   );
