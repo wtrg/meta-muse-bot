@@ -21,6 +21,15 @@ export const toEmailAddressListItem = (row: {
   lastReceivedAt: Date | null;
 }) => {
   const parsedMeta = parseAddressMeta(row.meta);
+  const safeMeta =
+    parsedMeta && typeof parsedMeta === "object"
+      ? Object.fromEntries(
+          Object.entries(parsedMeta).filter(
+            ([key]) =>
+              !["pin", "liveToken", "livePassword", "password"].includes(key)
+          )
+        )
+      : parsedMeta;
   const allowedFromDomains = getAllowedFromDomainsFromMeta(parsedMeta);
   const blockedSenderDomains = getBlockedSenderDomainsFromMeta(parsedMeta);
   const inboundRatePolicy = getInboundRatePolicyFromMeta(parsedMeta);
@@ -35,7 +44,7 @@ export const toEmailAddressListItem = (row: {
     address: row.address,
     localPart: row.localPart,
     domain: row.domain,
-    meta: parsedMeta,
+    meta: safeMeta,
     emailCount: row.emailCount,
     allowedFromDomains,
     blockedSenderDomains,

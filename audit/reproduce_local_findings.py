@@ -26,6 +26,13 @@ async def main():
             except bot.HTTPException as e:
                 print(json.dumps({"finding": "EXPORT_CROSS_SESSION", "requested": "new-empty-session", "status_code": e.status_code, "confirmed": False, "resolved": e.status_code == 404}))
 
+        with patch.object(bot, "EXPORTS_DIR", temp), patch.object(bot.state, "session_id", ""):
+            try:
+                response = await bot.export_session_csv()
+                print(json.dumps({"finding": "EMPTY_SESSION_FALLBACK_LATEST", "confirmed": True, "resolved": False}))
+            except bot.HTTPException as e:
+                print(json.dumps({"finding": "EMPTY_SESSION_FALLBACK_LATEST", "status_code": e.status_code, "confirmed": False, "resolved": e.status_code == 404}))
+
     fake = {"id": "synthetic", "email": "example@example.invalid", "pin": "222222", "otp": "111111"}
     with patch.object(bot.state, "session_accounts", [fake]), patch.object(bot, "get_public_tunnel_url", return_value="https://example.invalid"):
         result = await bot.get_session_info()

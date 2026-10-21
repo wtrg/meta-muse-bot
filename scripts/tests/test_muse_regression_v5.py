@@ -202,8 +202,15 @@ class MuseV5RegressionTests(unittest.TestCase):
     def test_path_traversal_sanitized_on_export(self):
         with patch.object(bot.state, "session_accounts", []):
             res = self.client.get("/api/bot/export-session-csv?session_id=../../test_traversal")
-            # Should sanitize session_id or return 404
-            self.assertIn(res.status_code, (200, 404))
+            # Should reject invalid session_id with 400 (or 404)
+            self.assertIn(res.status_code, (400, 404))
+
+    def test_empty_session_id_fails_closed_no_latest_leak(self):
+        with patch.object(bot.state, "session_id", None):
+            res = self.client.get("/api/bot/export-session-csv")
+            self.assertEqual(res.status_code, 404)
+            res_xlsx = self.client.get("/api/bot/export-session-excel")
+            self.assertEqual(res_xlsx.status_code, 404)
 
     # 9. Psiphon Manager Owned Lifecycle and Collision Check
     def test_psiphon_manager_ownership_lifecycle(self):

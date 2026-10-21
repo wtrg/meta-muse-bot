@@ -16,13 +16,20 @@ vi.mock("@/modules/public-otp/mail-tm", () => ({
   fetchLiveMailMessages: mocks.fetchLiveMailMessages,
 }));
 
-import { createPublicOtpRouter } from "@/modules/public-otp/router";
+import {
+  createPublicOtpRouter,
+  extractOtpAndLinks,
+  isAllowedMagicLinkHostname,
+  _resetOtpRateLimitsForTesting,
+} from "@/modules/public-otp/router";
+import { createApp } from "@/index";
 
-describe("public-otp router security & isolation (A01, A02, A04, A05)", () => {
+describe("public-otp router security, isolation & contract (A01, A02, A04, A05)", () => {
   let app: Hono<AppHonoEnv>;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetOtpRateLimitsForTesting();
     app = new Hono<AppHonoEnv>();
     app.route("/api/public", createPublicOtpRouter());
   });
@@ -61,7 +68,6 @@ describe("public-otp router security & isolation (A01, A02, A04, A05)", () => {
   });
 
   it("A02: fail-closed 404 when mailbox is not registered in system (does NOT leak via provider fallback)", async () => {
-    // Mock DB select returning empty
     mocks.getDb.mockReturnValue({
       select: () => ({
         from: () => ({
@@ -77,7 +83,6 @@ describe("public-otp router security & isolation (A01, A02, A04, A05)", () => {
     const body = await res.json();
     expect(body.ok).toBe(false);
     expect(body.error).toContain("Không tìm thấy");
-    // Ensure provider was NOT called
     expect(mocks.fetchLiveMailMessages).not.toHaveBeenCalled();
   });
 
@@ -107,37 +112,86 @@ describe("public-otp router security & isolation (A01, A02, A04, A05)", () => {
     expect(mocks.fetchLiveMailMessages).not.toHaveBeenCalled();
   });
 
+  it("A02: fail-closed 401 when mailbox has no PIN configured in meta (does not derive secret from addressId)", async () => {
+    mocks.getDb.mockReturnValue({
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: vi.fn().mockResolvedValue([
+              {
+                id: "addr-no-pin",
+                address: "nopin@example.com",
+                meta: JSON.stringify({ label: "no-pin-box" }),
+                createdAt: new Date(),
+              },
+            ]),
+          }),
+        }),
+      }),
+    });
+
+    // Even if caller tries to compute a deterministic hash or any PIN, it must fail closed
+    const res = await app.request("/api/public/otp?email=nopin@example.com&pin=123456");
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(mocks.fetchLiveMailMessages).not.toHaveBeenCalled();
+  });
+
+  it("Tenant isolation: cross-mailbox PIN access (Tenant B PIN against Tenant A mailbox) is rejected with 401", async () => {
+    mocks.getDb.mockReturnValue({
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: vi.fn().mockResolvedValue([
+              {
+                id: "addr-tenant-a",
+                address: "tenant-a@example.com",
+                meta: JSON.stringify({ pin: "111111" }),
+                createdAt: new Date(),
+              },
+            ]),
+          }),
+        }),
+      }),
+    });
+
+    // Tenant B attempts to use its own PIN (222222) to view Tenant A's mailbox
+    const res = await app.request("/api/public/otp?email=tenant-a@example.com&pin=222222");
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(mocks.fetchLiveMailMessages).not.toHaveBeenCalled();
+  });
+
   it("A02: succeeds with 200 and Cache-Control: no-store when mailbox and PIN are valid", async () => {
     mocks.getDb.mockReturnValue({
-      select: vi.fn((fields) => {
-        // First select is emailAddresses, second is emails
-        return {
-          from: () => ({
-            where: () => ({
+      select: vi.fn(() => ({
+        from: () => ({
+          where: () => ({
+            limit: vi.fn().mockResolvedValue([
+              {
+                id: "addr-1",
+                address: "valid-user@example.com",
+                meta: JSON.stringify({ pin: "888888" }),
+                createdAt: new Date(),
+              },
+            ]),
+            orderBy: () => ({
               limit: vi.fn().mockResolvedValue([
                 {
-                  id: "addr-1",
-                  address: "valid-user@example.com",
-                  meta: JSON.stringify({ pin: "888888" }),
-                  createdAt: new Date(),
+                  id: "msg-1",
+                  from: "noreply@muse.ai",
+                  subject: "Your Muse Code: 654321",
+                  bodyText: "Verification code: 654321",
+                  bodyHtml: "<p>Verification code: 654321</p>",
+                  receivedAt: new Date(),
                 },
               ]),
-              orderBy: () => ({
-                limit: vi.fn().mockResolvedValue([
-                  {
-                    id: "msg-1",
-                    from: "noreply@muse.ai",
-                    subject: "Your Muse Code: 654321",
-                    bodyText: "Verification code: 654321",
-                    bodyHtml: "<p>Verification code: 654321</p>",
-                    receivedAt: new Date(),
-                  },
-                ]),
-              }),
             }),
           }),
-        };
-      }),
+        }),
+      })),
     });
 
     const res = await app.request("/api/public/otp?email=valid-user@example.com&pin=888888");
@@ -147,5 +201,92 @@ describe("public-otp router security & isolation (A01, A02, A04, A05)", () => {
     expect(body.ok).toBe(true);
     expect(body.hasEmails).toBe(true);
     expect(body.latest.otp).toBe("654321");
+  });
+
+  it("Rate limit: enforces 10 requests/minute threshold and returns 429 Too Many Requests on overflow", async () => {
+    mocks.getDb.mockReturnValue({
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      }),
+    });
+
+    const headers = { "cf-connecting-ip": "203.0.113.42" };
+    for (let i = 0; i < 10; i++) {
+      const res = await app.request("/api/public/otp?email=rate-target@example.com&pin=123456", { headers });
+      expect(res.status).toBe(404);
+    }
+
+    // 11th request from the same IP/email key must be blocked by rate limiter
+    const blockedRes = await app.request("/api/public/otp?email=rate-target@example.com&pin=123456", { headers });
+    expect(blockedRes.status).toBe(429);
+    expect(blockedRes.headers.get("Retry-After")).toBeDefined();
+    const body = await blockedRes.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain("vượt quá số lần thử");
+  });
+
+  it("Mounted via createApp(): verifies routing and security through top-level application factory", async () => {
+    const mockCtx = { waitUntil: vi.fn(), passThroughOnException: vi.fn() };
+    const fullApp = createApp({ createAuthFactory: (() => ({}) as any) });
+    const res = await fullApp.request("/api/public/recent-otps", undefined, {} as any, mockCtx as any);
+    expect(res.status).toBe(404);
+
+    const otpMissingParam = await fullApp.request("/api/public/otp?email=test@example.com", undefined, {} as any, mockCtx as any);
+    expect(otpMissingParam.status).toBe(400);
+  });
+});
+
+describe("extractOtpAndLinks hostname validation and phishing defense", () => {
+  it("strictly validates allowed hostnames and subdomains", () => {
+    expect(isAllowedMagicLinkHostname("muse.ai")).toBe(true);
+    expect(isAllowedMagicLinkHostname("auth.muse.ai")).toBe(true);
+    expect(isAllowedMagicLinkHostname("facebook.com")).toBe(true);
+    expect(isAllowedMagicLinkHostname("www.facebook.com")).toBe(true);
+    expect(isAllowedMagicLinkHostname("meta.com")).toBe(true);
+    expect(isAllowedMagicLinkHostname("instagram.com")).toBe(true);
+
+    // Negative tests: Lookalikes, spoofing, query injection
+    expect(isAllowedMagicLinkHostname("evil-phishing.com")).toBe(false);
+    expect(isAllowedMagicLinkHostname("muse.ai.attacker.com")).toBe(false);
+    expect(isAllowedMagicLinkHostname("fake-facebook.com")).toBe(false);
+    expect(isAllowedMagicLinkHostname("attacker-meta.com")).toBe(false);
+    expect(isAllowedMagicLinkHostname("notmuse.ai")).toBe(false);
+  });
+
+  it("rejects links from evil hosts containing target domains in query or path", () => {
+    const evilQueryEmail = `
+      Xin chào, vui lòng xác nhận tài khoản:
+      https://evil-phishing.com/steal?fake=muse.ai&ref=meta.com
+    `;
+    const res1 = extractOtpAndLinks("Xác nhận tài khoản", evilQueryEmail, "");
+    expect(res1.magicLink).toBeNull();
+
+    const evilSubdomainEmail = `
+      Bấm vào đây để đăng nhập:
+      https://muse.ai.attacker.com/session/confirm
+    `;
+    const res2 = extractOtpAndLinks("Xác nhận", evilSubdomainEmail, "");
+    expect(res2.magicLink).toBeNull();
+
+    const evilKeywordPathEmail = `
+      https://attacker.com/confirm?provider=facebook.com
+    `;
+    const res3 = extractOtpAndLinks("Xác nhận", evilKeywordPathEmail, "");
+    expect(res3.magicLink).toBeNull();
+  });
+
+  it("accepts valid links from official providers", () => {
+    const legitimateEmail = `
+      Mã của bạn: 543210
+      Hoặc bấm vào link:
+      https://auth.muse.ai/verify?token=secure-token-123
+    `;
+    const res = extractOtpAndLinks("Mã đăng nhập", legitimateEmail, "");
+    expect(res.otp).toBe("543210");
+    expect(res.magicLink).toBe("https://auth.muse.ai/verify?token=secure-token-123");
   });
 });

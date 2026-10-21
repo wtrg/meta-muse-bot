@@ -2073,52 +2073,56 @@ async def get_session_info():
         "excelUrl": "/api/bot/export-session-excel"
     }
 
+SESSION_ID_REGEX = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
 @app.get("/api/bot/export-session-csv")
 async def export_session_csv(session_id: Optional[str] = None):
-    target_id = session_id or state.session_id
-    if target_id:
-        safe_id = "".join(c for c in target_id if c.isalnum() or c in ("_", "-"))
-        if not safe_id:
-            raise HTTPException(status_code=400, detail="Mã phiên không hợp lệ.")
-        file_path = os.path.join(EXPORTS_DIR, f"muse_session_{safe_id}.csv")
-        if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail=f"Không tìm thấy file CSV cho phiên '{safe_id}'.")
-        return FileResponse(
-            file_path,
-            media_type="text/csv; charset=utf-8",
-            filename=f"muse_session_{safe_id}.csv"
+    target_id = (session_id or state.session_id or "").strip()
+    if not target_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Không có phiên làm việc hiện tại hoặc chưa chọn mã phiên."
         )
-    file_path = os.path.join(EXPORTS_DIR, "muse_session_latest.csv")
+    if not SESSION_ID_REGEX.match(target_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Mã phiên không hợp lệ. Chỉ chấp nhận ký tự a-z, A-Z, 0-9, gạch ngang và gạch dưới (tối đa 64 ký tự)."
+        )
+    file_path = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.csv")
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Chưa có file CSV phiên này.")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Không tìm thấy file CSV cho phiên '{target_id}'."
+        )
     return FileResponse(
         file_path,
         media_type="text/csv; charset=utf-8",
-        filename="muse_session_latest.csv"
+        filename=f"muse_session_{target_id}.csv"
     )
 
 @app.get("/api/bot/export-session-excel")
 async def export_session_excel(session_id: Optional[str] = None):
-    target_id = session_id or state.session_id
-    if target_id:
-        safe_id = "".join(c for c in target_id if c.isalnum() or c in ("_", "-"))
-        if not safe_id:
-            raise HTTPException(status_code=400, detail="Mã phiên không hợp lệ.")
-        file_path = os.path.join(EXPORTS_DIR, f"muse_session_{safe_id}.xlsx")
-        if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail=f"Không tìm thấy file Excel cho phiên '{safe_id}'.")
-        return FileResponse(
-            file_path,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            filename=f"muse_session_{safe_id}.xlsx"
+    target_id = (session_id or state.session_id or "").strip()
+    if not target_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Không có phiên làm việc hiện tại hoặc chưa chọn mã phiên."
         )
-    file_path = os.path.join(EXPORTS_DIR, "muse_session_latest.xlsx")
+    if not SESSION_ID_REGEX.match(target_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Mã phiên không hợp lệ. Chỉ chấp nhận ký tự a-z, A-Z, 0-9, gạch ngang và gạch dưới (tối đa 64 ký tự)."
+        )
+    file_path = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.xlsx")
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Chưa có file Excel phiên này.")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Không tìm thấy file Excel cho phiên '{target_id}'."
+        )
     return FileResponse(
         file_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename="muse_session_latest.xlsx"
+        filename=f"muse_session_{target_id}.xlsx"
     )
 
 

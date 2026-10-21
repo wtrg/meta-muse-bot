@@ -4,13 +4,71 @@ import type { AppHonoEnv } from "@/app/types";
 import { getDb } from "@/platform/db/client";
 import { emailAddresses, emails } from "@/db/email.schema";
 import { getAllowedDomains } from "@/shared/env";
-import { getOrDerivePin } from "@/shared/pin";
+import { getMailboxPin, getOrDerivePin } from "@/shared/pin";
+import { consumeFixedWindowRateLimit } from "@/shared/rate-limiter";
 import {
   getLiveMailDomains,
   fetchLiveMailMessages,
 } from "./mail-tm";
 
-export { getOrDerivePin };
+export { getMailboxPin, getOrDerivePin };
+
+export const ALLOWED_MAGIC_LINK_DOMAINS = [
+  "muse.ai",
+  "facebook.com",
+  "meta.com",
+  "instagram.com",
+];
+
+export const isAllowedMagicLinkHostname = (hostname: string): boolean => {
+  const host = hostname.toLowerCase().trim();
+  return ALLOWED_MAGIC_LINK_DOMAINS.some(
+    allowed => host === allowed || host.endsWith("." + allowed)
+  );
+};
+
+const memoryRateLimits = new Map<string, { count: number; resetAtMs: number }>();
+
+export const _resetOtpRateLimitsForTesting = () => {
+  memoryRateLimits.clear();
+};
+
+export const checkOtpRateLimit = async (
+  env: AppHonoEnv["Bindings"],
+  clientKey: string,
+  maxAttempts: number = 10,
+  windowSeconds: number = 60
+): Promise<{ allowed: boolean; retryAfterSeconds?: number }> => {
+  if (env?.FIXED_WINDOW_RATE_LIMITERS) {
+    try {
+      const res = await consumeFixedWindowRateLimit({
+        namespace: env.FIXED_WINDOW_RATE_LIMITERS,
+        key: `otp:${clientKey}`,
+        windowSeconds,
+        maxAttempts,
+      });
+      return res;
+    } catch {}
+  }
+
+  const now = Date.now();
+  const entry = memoryRateLimits.get(clientKey);
+  if (!entry || entry.resetAtMs <= now) {
+    memoryRateLimits.set(clientKey, {
+      count: 1,
+      resetAtMs: now + windowSeconds * 1000,
+    });
+    return { allowed: true };
+  }
+
+  if (entry.count >= maxAttempts) {
+    const retryAfter = Math.max(1, Math.ceil((entry.resetAtMs - now) / 1000));
+    return { allowed: false, retryAfterSeconds: retryAfter };
+  }
+
+  entry.count++;
+  return { allowed: true };
+};
 
 export const extractOtpAndLinks = (
   subject: string = "",
@@ -63,19 +121,24 @@ export const extractOtpAndLinks = (
   }
 
   // Find magic links / activation buttons (e.g. Muse.ai / Meta verify links)
+  // Only accept links from verified official domains (strict hostname allowlist)
   const fullContent = `${bodyText}\n${bodyHtml}`;
-  const linkMatches = fullContent.match(
-    /https?:\/\/[^\s"'<>]+(?:muse\.ai|facebook\.com|meta\.com|instagram\.com|verify|confirm|login|signin|token|auth|activate)[^\s"'<>]*/gi
-  );
+  const urlRegex = /https?:\/\/[^\s"'<>]+/gi;
+  const linkMatches = fullContent.match(urlRegex);
   let magicLink: string | null = null;
-  if (linkMatches && linkMatches.length > 0) {
-    const candidate = linkMatches[0].replace(/[.,;!]+$/, "");
-    try {
-      const parsedUrl = new URL(candidate);
-      if (parsedUrl.protocol === "https:" || parsedUrl.protocol === "http:") {
-        magicLink = candidate;
-      }
-    } catch {}
+  if (linkMatches) {
+    for (const rawUrl of linkMatches) {
+      const candidate = rawUrl.replace(/[.,;!]+$/, "");
+      try {
+        const parsedUrl = new URL(candidate);
+        if (parsedUrl.protocol === "https:" || parsedUrl.protocol === "http:") {
+          if (isAllowedMagicLinkHostname(parsedUrl.hostname)) {
+            magicLink = candidate;
+            break;
+          }
+        }
+      } catch {}
+    }
   }
 
   return { otp, magicLink };
@@ -116,6 +179,25 @@ export const createPublicOtpRouter = () => {
     }
 
     const email = rawEmail.trim().toLowerCase();
+
+    // Rate limiting per IP / email to prevent brute-forcing PINs
+    const clientIp =
+      c.req.header("cf-connecting-ip") ||
+      c.req.header("x-forwarded-for") ||
+      "127.0.0.1";
+    const rateLimitKey = `${clientIp}:${email}`;
+    const rateLimit = await checkOtpRateLimit(c.env, rateLimitKey, 10, 60);
+    if (!rateLimit.allowed) {
+      c.header("Retry-After", String(rateLimit.retryAfterSeconds ?? 60));
+      return c.json(
+        {
+          ok: false,
+          error: "Đã vượt quá số lần thử lấy OTP. Vui lòng thử lại sau.",
+        },
+        429
+      );
+    }
+
     const db = getDb(c.env);
 
     // Look up address in database
@@ -140,13 +222,13 @@ export const createPublicOtpRouter = () => {
       );
     }
 
-    // Validate PIN strictly before granting any access or message retrieval
-    const expectedPin = getOrDerivePin(addr.meta, addr.id);
-    if (pin !== expectedPin) {
+    // Validate PIN strictly: Fail-closed if no PIN configured on mailbox or PIN does not match
+    const expectedPin = getMailboxPin(addr.meta);
+    if (!expectedPin || pin !== expectedPin) {
       return c.json(
         {
           ok: false,
-          error: "Mã PIN bảo mật không chính xác. Vui lòng kiểm tra lại mã được cấp.",
+          error: "Mã PIN bảo mật không chính xác hoặc hộp thư chưa được thiết lập mã PIN.",
         },
         401
       );

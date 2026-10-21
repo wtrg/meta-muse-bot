@@ -18,4 +18,8 @@ Codex kiểm tra source đang thay đổi; đây chưa phải nghiệm thu commi
 
 ## Phạm vi phối hợp
 
-Tiếp tục sửa bảo mật/tính đúng, giữ mã mời/OTP/export, bỏ auto Facebook/fb-pool. VPN hiện có chỉ audit. Không dùng/chuyển tiếp thông tin đăng nhập người dùng, không xây/giao phần tự động gắn-gỡ email Facebook để vượt tuổi/vùng hoặc cho tài khoản trẻ em. Chưa có xác nhận commit/push sau fix; HEAD quan sát vẫn b45b512. Sau khi có SHA mới, chuyển diff đã che secret sang ChatGPT web để review độc lập, không lặp review trên cùng snapshot khi chưa có thay đổi.
+### Probe bổ sung sau bản sửa export đầu tiên
+
+Source working tree mới đã trả 404 khi không có phiên, 400 cho ID có dấu chấm, 404 cho ID không có file, và 200 cho session-a synthetic hợp lệ, cả CSV/XLSX: 8/8 ca này đạt. Tuy nhiên `session_id=latest` vẫn trả 200 từ artifact latest cũ khi không có phiên hiện tại (2/2 định dạng). ID thực được tạo bằng timestamp, không có session record tên latest; cần chặn alias reserved hoặc map qua manifest session được phép. Đây là probe source bằng AST namespace synthetic, không phải test middleware/auth HTTP hoặc kết luận khai thác từ xa. Chưa nghiệm thu export hoàn toàn.
+
+Tiếp tục sửa bảo mật/tính đúng, giữ mã mời/OTP/export, bỏ auto Facebook/fb-pool. VPN hiện có chỉ audit. Không dùng/chuyển tiếp thông tin đăng nhập người dùng, không xây/giao phần tự động gắn-gỡ email Facebook để vượt tuổi/vùng hoặc cho tài khoản trẻ em. Tại audit ban đầu HEAD là b45b512; lần kiểm tra sau đã xác nhận commit 73db799 trên origin nhánh review/audit-fix-2026-10-22 và gửi source trích đúng SHA cho ChatGPT. Kết quả quan sát CHANGES REQUIRED được ghi ở CHATGPT_R02_REVIEW_SUMMARY.md; sửa export đang ở working tree, chưa có commit mới được kiểm chứng. Chỉ gửi review tiếp khi có diff mới có ý nghĩa.
