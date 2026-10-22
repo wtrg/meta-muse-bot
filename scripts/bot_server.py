@@ -638,7 +638,7 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
         if os.path.exists(target_abs):
             existed_targets.add(target_abs)
 
-    # Establish durable in-progress gate BEFORE mutating any published data
+    # Establish in-progress publication gate BEFORE mutating any published data
     try:
         with open(pending_marker, "w", encoding="utf-8") as pm:
             json.dump({
@@ -646,6 +646,7 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
                 "state": "pending",
                 "started_at": time.strftime("%Y-%m-%d %H:%M:%S")
             }, pm, ensure_ascii=False)
+            pm.flush()
     except Exception as gate_err:
         raise OSError(f"Cannot establish publication gate for session '{session_id}': {gate_err}") from gate_err
 
@@ -703,27 +704,21 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
         atomic_write_excel(root_latest_excel, wb)
         written_files.append(os.path.abspath(root_latest_excel))
 
-        # Xóa backup sau khi toàn bộ batch hoàn tất thành công
-        for bak in list(existing_backups.values()):
-            if os.path.exists(bak):
-                try:
-                    os.remove(bak)
-                except OSError:
-                    pass
-
-        # Xóa failure marker nếu có từ lần chạy lỗi trước
+        # 4. Checked readiness step: xóa failure marker nếu có từ lần chạy lỗi trước
         if os.path.exists(failure_marker):
             try:
                 os.remove(failure_marker)
-            except OSError:
-                pass
+            except Exception as clear_fail_err:
+                raise OSError(f"Could not clear failure marker for session '{session_id}': {clear_fail_err}") from clear_fail_err
 
-        # Xóa pending marker (durable gate); writer must agree with download readiness
+        # 5. Xóa pending marker; un-gate phiên để download endpoints sẵn sàng phục vụ
         if os.path.exists(pending_marker):
             try:
                 os.remove(pending_marker)
             except Exception as clear_err:
-                raise OSError(f"Could not clear pending marker: {clear_err}") from clear_err
+                raise OSError(f"Could not clear pending marker for session '{session_id}': {clear_err}") from clear_err
+
+        # COMMIT POINT: Toàn bộ pre-commit steps thành công, phiên đã un-gate và sẵn sàng download!
     except Exception as exc:
         cleanup_errors = []
         failed_restore_backups = set()
@@ -737,6 +732,7 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
                     "failed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "error": str(exc)
                 }, fm, ensure_ascii=False)
+                fm.flush()
         except Exception as mark_err:
             cleanup_errors.append(f"Failed to write failure marker: {mark_err}")
 
@@ -785,6 +781,17 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
                 pass
 
         raise
+
+    # POST-COMMIT CLEANUP:
+    # Điểm cam kết (commit point) đã qua thành công. Các file tải về đã sẵn sàng phục vụ.
+    # Dọn dẹp các bản sao lưu (.bak) tạm thời. Lỗi dọn dẹp ở giai đoạn này là non-fatal
+    # và TUYỆT ĐỐI KHÔNG kích hoạt rollback vì dữ liệu thế hệ mới đã được publish chính thức!
+    for bak in list(existing_backups.values()):
+        if os.path.exists(bak):
+            try:
+                os.remove(bak)
+            except OSError:
+                pass
 
 def redact_sensitive(text: str) -> str:
     if not isinstance(text, str):

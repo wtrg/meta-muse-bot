@@ -1141,6 +1141,99 @@ class MuseG5ExplicitTableTests(BaseIsolatedTestCase):
         res_csv = self.client.get(f"/api/bot/export-session-csv?session_id={session_id}")
         self.assertEqual(res_csv.status_code, 409)
 
+    def test_t40_pending_clear_failure_preserves_gen_a_with_existing_generation(self):
+        # T40 (R08 P1): If clearing pending marker fails on an existing generation,
+        # writer raises OSError, both endpoints reject with 409, and Gen A files are preserved intact
+        session_id = "test_t40_pending_gen_a"
+        gen_a_accounts = [{"email": "gena_t40@example.com", "pin": "111111"}]
+        gen_b_accounts = [{"email": "genb_t40@example.com", "pin": "222222"}]
+
+        bot.save_session_csv_and_excel(gen_a_accounts, session_id)
+        csv_path = os.path.join(bot.EXPORTS_DIR, f"muse_session_{session_id}.csv")
+        xlsx_path = os.path.join(bot.EXPORTS_DIR, f"muse_session_{session_id}.xlsx")
+        gen_a_csv_bytes = open(csv_path, "rb").read()
+        gen_a_xlsx_bytes = open(xlsx_path, "rb").read()
+
+        orig_remove = os.remove
+        def fail_clear_pending(p):
+            if str(p).endswith(".pending"):
+                raise PermissionError("synthetic pending clear failure")
+            return orig_remove(p)
+
+        with patch.object(os, "remove", side_effect=fail_clear_pending):
+            with self.assertRaises(OSError):
+                bot.save_session_csv_and_excel(gen_b_accounts, session_id)
+
+        # Download endpoints must reject with 409 because pending/failed marker remains
+        res_csv = self.client.get(f"/api/bot/export-session-csv?session_id={session_id}")
+        res_excel = self.client.get(f"/api/bot/export-session-excel?session_id={session_id}")
+        self.assertEqual(res_csv.status_code, 409)
+        self.assertEqual(res_excel.status_code, 409)
+
+        # Generation A original bytes must be preserved intact
+        self.assertEqual(open(csv_path, "rb").read(), gen_a_csv_bytes)
+        self.assertEqual(open(xlsx_path, "rb").read(), gen_a_xlsx_bytes)
+
+    def test_t41_failure_marker_clear_failure_raises_and_agrees_with_download_endpoint(self):
+        # T41 (R08 P2): Failure marker clear failure raises OSError, download endpoints reject with 409;
+        # subsequent retry succeeds and endpoints serve 200 with new data
+        session_id = "test_t41_failed_clear"
+        gen_b_accounts = [{"email": "genb_t41@example.com", "pin": "333333"}]
+
+        # Seed pre-existing failed marker
+        failure_marker = os.path.join(bot.EXPORTS_DIR, f"muse_session_{session_id}.failed")
+        with open(failure_marker, "w", encoding="utf-8") as fm:
+            json.dump({"session_id": session_id, "error": "old failure"}, fm)
+
+        orig_remove = os.remove
+        def fail_clear_failed(p):
+            if str(p).endswith(".failed"):
+                raise PermissionError("synthetic failed marker unlink error")
+            return orig_remove(p)
+
+        # 1. Unlink failure raises OSError and download endpoints reject with 409
+        with patch.object(os, "remove", side_effect=fail_clear_failed):
+            with self.assertRaises(OSError):
+                bot.save_session_csv_and_excel(gen_b_accounts, session_id)
+
+        res_csv = self.client.get(f"/api/bot/export-session-csv?session_id={session_id}")
+        res_excel = self.client.get(f"/api/bot/export-session-excel?session_id={session_id}")
+        self.assertEqual(res_csv.status_code, 409)
+        self.assertEqual(res_excel.status_code, 409)
+
+        # 2. Recovery retry without unlink error succeeds and download endpoints serve 200
+        bot.save_session_csv_and_excel(gen_b_accounts, session_id)
+        res_csv_ok = self.client.get(f"/api/bot/export-session-csv?session_id={session_id}")
+        res_excel_ok = self.client.get(f"/api/bot/export-session-excel?session_id={session_id}")
+        self.assertEqual(res_csv_ok.status_code, 200)
+        self.assertEqual(res_excel_ok.status_code, 200)
+        self.assertIn("genb_t41@example.com", res_csv_ok.text)
+
+    def test_t42_post_commit_backup_cleanup_failure_does_not_rollback(self):
+        # T42: Post-commit cleanup failure does not trigger rollback or invalidate committed generation
+        session_id = "test_t42_post_commit"
+        gen_a_accounts = [{"email": "gena_t42@example.com", "pin": "444444"}]
+        gen_b_accounts = [{"email": "genb_t42@example.com", "pin": "555555"}]
+
+        bot.save_session_csv_and_excel(gen_a_accounts, session_id)
+
+        orig_remove = os.remove
+        def fail_remove_bak(p):
+            if ".bak_" in str(p):
+                raise PermissionError("synthetic post-commit backup removal failure")
+            return orig_remove(p)
+
+        with patch.object(os, "remove", side_effect=fail_remove_bak):
+            # Must succeed without raising
+            bot.save_session_csv_and_excel(gen_b_accounts, session_id)
+
+        # Download endpoints serve committed generation B
+        res_csv = self.client.get(f"/api/bot/export-session-csv?session_id={session_id}")
+        res_excel = self.client.get(f"/api/bot/export-session-excel?session_id={session_id}")
+        self.assertEqual(res_csv.status_code, 200)
+        self.assertEqual(res_excel.status_code, 200)
+        self.assertIn("genb_t42@example.com", res_csv.text)
+
 
 if __name__ == "__main__":
     unittest.main()
