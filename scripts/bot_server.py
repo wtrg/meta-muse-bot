@@ -535,11 +535,13 @@ def save_accounts_txt():
 
 def save_accounts():
     try:
-        with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(state.accounts, f, ensure_ascii=False, indent=2)
+        atomic_write_text(ACCOUNTS_FILE, json.dumps(state.accounts, ensure_ascii=False, indent=2))
         save_accounts_txt()
     except Exception as e:
-        print(f"Error saving accounts: {e}")
+        redact_fn = globals().get("redact_sensitive")
+        safe_err = redact_fn(str(e)) if redact_fn else str(e)
+        print(f"Error saving accounts: {safe_err}")
+        raise
 
 def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_id: str):
     if not session_id:
@@ -557,6 +559,7 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
     csv_filename = f"muse_session_{session_id}.csv"
     excel_filename = f"muse_session_{session_id}.xlsx"
     
+    os.makedirs(EXPORTS_DIR, exist_ok=True)
     session_csv_path = os.path.join(EXPORTS_DIR, csv_filename)
     session_excel_path = os.path.join(EXPORTS_DIR, excel_filename)
     
@@ -566,61 +569,149 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
     root_latest_csv = os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_session_latest.csv")
     root_latest_excel = os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_session_latest.xlsx")
     
-    written_session_files = []
-    try:
-        # Build Excel Workbook in memory first to validate openpyxl before touching any files on disk
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
-        
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Muse Accounts"
-        
-        header_fill = PatternFill(start_color="10B981", end_color="10B981", fill_type="solid")
-        header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
-        center_align = Alignment(horizontal="center", vertical="center")
-        left_align = Alignment(horizontal="left", vertical="center")
-        
-        ws.append(headers)
-        for col_num in range(1, len(headers) + 1):
-            cell = ws.cell(row=1, column=col_num)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = center_align
-            
-        for r_idx, row_data in enumerate(rows, start=2):
-            ws.append(row_data)
-            ws.cell(row=r_idx, column=1).alignment = center_align
-            ws.cell(row=r_idx, column=2).alignment = left_align
-            ws.cell(row=r_idx, column=3).alignment = center_align
-            ws.cell(row=r_idx, column=4).alignment = left_align
-            
-        ws.column_dimensions['A'].width = 8
-        ws.column_dimensions['B'].width = 34
-        ws.column_dimensions['C'].width = 16
-        ws.column_dimensions['D'].width = 85
+    failure_marker = os.path.join(EXPORTS_DIR, f"muse_session_{session_id}.failed")
+    targets = [
+        session_csv_path,
+        session_excel_path,
+        latest_csv_path,
+        root_latest_csv,
+        latest_excel_path,
+        root_latest_excel
+    ]
 
+    import shutil
+    batch_token = f"{session_id}_{os.getpid()}_{int(time.time() * 1000)}"
+    existing_backups = {}
+    for target in targets:
+        target_abs = os.path.abspath(target)
+        if os.path.exists(target_abs) and target_abs not in existing_backups:
+            target_dir = os.path.dirname(target_abs)
+            os.makedirs(target_dir, exist_ok=True)
+            bak_path = target_abs + f".bak_{batch_token}"
+            try:
+                shutil.copy2(target_abs, bak_path)
+                existing_backups[target_abs] = bak_path
+            except Exception:
+                pass
+
+    # Build Excel Workbook in memory first to validate openpyxl before touching any files on disk
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Muse Accounts"
+    
+    header_fill = PatternFill(start_color="10B981", end_color="10B981", fill_type="solid")
+    header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+    center_align = Alignment(horizontal="center", vertical="center")
+    left_align = Alignment(horizontal="left", vertical="center")
+    
+    ws.append(headers)
+    for col_num in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = center_align
+        
+    for r_idx, row_data in enumerate(rows, start=2):
+        ws.append(row_data)
+        ws.cell(row=r_idx, column=1).alignment = center_align
+        ws.cell(row=r_idx, column=2).alignment = left_align
+        ws.cell(row=r_idx, column=3).alignment = center_align
+        ws.cell(row=r_idx, column=4).alignment = left_align
+        
+    ws.column_dimensions['A'].width = 8
+    ws.column_dimensions['B'].width = 34
+    ws.column_dimensions['C'].width = 16
+    ws.column_dimensions['D'].width = 85
+
+    written_files = []
+    try:
         # 1. Ghi File CSV của phiên
         atomic_write_csv(session_csv_path, headers, rows)
-        written_session_files.append(session_csv_path)
+        written_files.append(os.path.abspath(session_csv_path))
 
         # 2. Ghi File Excel của phiên
         atomic_write_excel(session_excel_path, wb)
-        written_session_files.append(session_excel_path)
+        written_files.append(os.path.abspath(session_excel_path))
 
         # 3. Cập nhật latest files sau khi các file phiên đã hoàn tất
         atomic_write_csv(latest_csv_path, headers, rows)
+        written_files.append(os.path.abspath(latest_csv_path))
+
         atomic_write_csv(root_latest_csv, headers, rows)
+        written_files.append(os.path.abspath(root_latest_csv))
+
         atomic_write_excel(latest_excel_path, wb)
+        written_files.append(os.path.abspath(latest_excel_path))
+
         atomic_write_excel(root_latest_excel, wb)
-    except Exception:
-        # Roll back session artifacts created in this failed batch so caller never sees partial files
-        for p in written_session_files:
-            if os.path.exists(p):
+        written_files.append(os.path.abspath(root_latest_excel))
+
+        # Xóa backup sau khi toàn bộ batch hoàn tất thành công
+        for bak in list(existing_backups.values()):
+            if os.path.exists(bak):
                 try:
-                    os.remove(p)
+                    os.remove(bak)
                 except OSError:
                     pass
+
+        # Xóa failure marker nếu có từ lần chạy lỗi trước
+        if os.path.exists(failure_marker):
+            try:
+                os.remove(failure_marker)
+            except OSError:
+                pass
+    except Exception as exc:
+        cleanup_errors = []
+        # 1. Tạo failure marker để các download endpoints từ chối với status 409
+        try:
+            with open(failure_marker, "w", encoding="utf-8") as fm:
+                json.dump({
+                    "session_id": session_id,
+                    "failed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "error": str(exc)
+                }, fm, ensure_ascii=False)
+        except Exception as mark_err:
+            cleanup_errors.append(f"Failed to write failure marker: {mark_err}")
+
+        # 2. Khôi phục các file đã ghi về trạng thái ban đầu
+        for p in reversed(written_files):
+            if p in existing_backups:
+                bak = existing_backups[p]
+                try:
+                    os.replace(bak, p)
+                    existing_backups.pop(p, None)
+                except Exception as restore_err:
+                    cleanup_errors.append(f"Failed to restore {p} from backup: {restore_err}")
+            else:
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                except Exception as del_err:
+                    cleanup_errors.append(f"Failed to remove newly written file {p}: {del_err}")
+
+        # 3. Dọn dẹp các backup còn lại
+        for bak in list(existing_backups.values()):
+            try:
+                if os.path.exists(bak):
+                    os.remove(bak)
+            except Exception as bak_err:
+                cleanup_errors.append(f"Failed to remove backup {bak}: {bak_err}")
+
+        # 4. Ghi nhận lỗi cleanup vào failure marker nếu có
+        if cleanup_errors and os.path.exists(failure_marker):
+            try:
+                with open(failure_marker, "r+", encoding="utf-8") as fm:
+                    data = json.load(fm)
+                    data["cleanup_errors"] = cleanup_errors
+                    fm.seek(0)
+                    json.dump(data, fm, ensure_ascii=False)
+                    fm.truncate()
+            except Exception:
+                pass
+
         raise
 
 def redact_sensitive(text: str) -> str:
@@ -1377,7 +1468,10 @@ async def process_single_account(
                 "error": access["message"]
             }
             state.accounts.insert(0, account_data)
-            save_accounts()
+            try:
+                save_accounts()
+            except Exception as e:
+                add_log(f"Lỗi khi lưu tài khoản vào danh sách: {redact_sensitive(str(e))}", "error")
             await browser.close()
             err_msg = access["message"]
             add_log(f"❌ {err_msg}", "error", 100)
@@ -1414,8 +1508,12 @@ async def process_single_account(
         }
         
         state.accounts.insert(0, account_data)
-        save_accounts()
-        add_log(f"🎉 TẠO VÀ ĐĂNG NHẬP MÀN HÌNH CHAT THÀNH CÔNG: {email}!", "success", 100)
+        try:
+            save_accounts()
+            add_log(f"🎉 TẠO VÀ ĐĂNG NHẬP MÀN HÌNH CHAT THÀNH CÔNG: {email}!", "success", 100)
+        except Exception as e:
+            add_log(f"Đăng nhập chat thành công nhưng lưu file tài khoản thất bại: {redact_sensitive(str(e))}", "error", 100)
+            raise
         
         if visible:
             await asyncio.sleep(3)
@@ -1476,7 +1574,10 @@ async def bot_worker(req: StartBotRequest):
                 if isinstance(acc, dict) and acc.get("status") == "SUCCESS_CHAT_READY" and acc.get("requirementsComplete", False):
                     state.session_accounts.append(acc)
                     success_count += 1
-                    save_session_csv_and_excel(state.session_accounts, state.session_id)
+                    try:
+                        save_session_csv_and_excel(state.session_accounts, state.session_id)
+                    except Exception as e:
+                        add_log(f"Lỗi khi xuất file phiên: {type(e).__name__}: {redact_sensitive(str(e))}", "error")
                 elif isinstance(acc, dict) and acc.get("status") == "SUCCESS_CHAT_READY":
                     add_log("Tài khoản đã vào chat nhưng chưa xác nhận đổi mã mời. Dừng để xử lý trên tài khoản này, không tạo thêm.", "warning")
                     break
@@ -1484,7 +1585,7 @@ async def bot_worker(req: StartBotRequest):
                 add_log(f"Dừng phiên: {e}. Không tiếp tục tạo thêm tài khoản khi chưa vào được chat.", "error")
                 break
             except Exception as e:
-                add_log(f"Lỗi ở tài khoản {i + 1}: {type(e).__name__}: {str(e)}", "error")
+                add_log(f"Lỗi ở tài khoản {i + 1}: {type(e).__name__}: {redact_sensitive(str(e))}", "error")
                 
             if i < req.count - 1 and not state.stop_requested:
                 add_log("Nghỉ 3 giây trước tài khoản tiếp theo...", "info")
@@ -1495,7 +1596,7 @@ async def bot_worker(req: StartBotRequest):
                 save_session_csv_and_excel(state.session_accounts, state.session_id)
                 add_log(f"📊 Đã tự động xuất File CSV & Excel riêng cho phiên này ({len(state.session_accounts)} tài khoản)!", "success", 100)
             except Exception as e:
-                add_log(f"Lỗi khi tự động xuất file phiên: {type(e).__name__}: {str(e)}", "error")
+                add_log(f"Lỗi khi tự động xuất file phiên: {type(e).__name__}: {redact_sensitive(str(e))}", "error")
             
         add_log(f"Kết thúc phiên: {success_count}/{req.count} tài khoản hoàn tất yêu cầu chat và mã mời.", "success" if success_count == req.count else "warning" if success_count else "error", 100)
     finally:
@@ -1615,7 +1716,11 @@ async def get_accounts():
 @app.delete("/api/bot/accounts")
 async def clear_accounts():
     state.accounts = []
-    save_accounts()
+    try:
+        save_accounts()
+    except Exception as e:
+        safe_err = redact_sensitive(str(e))
+        raise HTTPException(status_code=500, detail=f"Lỗi khi lưu trạng thái sau khi xóa: {safe_err}")
     return {"ok": True, "message": "Đã xóa lịch sử tài khoản"}
 
 ALLOWED_SCREENSHOT_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -1923,7 +2028,12 @@ async def recheck_session(account_id: str):
         raise HTTPException(status_code=502, detail=f"Không tải được Muse để kiểm tra ({e}). Chưa thay đổi kết quả tài khoản.")
     acc.update(status=result["status"], error=result["message"], url=result["url"],
                cookies=result["cookies"], proxy_used=tunnel.get("proxy"))
-    save_accounts()
+    try:
+        save_accounts()
+    except Exception as e:
+        safe_err = redact_sensitive(str(e))
+        add_log(f"Kiểm tra hoàn tất nhưng lưu tài khoản thất bại: {safe_err}", "error")
+        raise HTTPException(status_code=500, detail=f"Lưu tài khoản thất bại: {safe_err}")
     return {"ok": True, "status": result["status"], "message": result["message"]}
 
 
@@ -2193,6 +2303,12 @@ async def export_session_csv(session_id: Optional[str] = None):
             status_code=400,
             detail=f"Mã phiên không hợp lệ hoặc thuộc từ khóa định danh phiên dành riêng ('{target_id}')."
         )
+    failure_marker = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.failed")
+    if os.path.exists(failure_marker):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Phiên '{target_id}' gặp lỗi trong quá trình xuất dữ liệu và không thể tải về artifact dở dang."
+        )
     file_path = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.csv")
     if not os.path.exists(file_path):
         raise HTTPException(
@@ -2217,6 +2333,12 @@ async def export_session_excel(session_id: Optional[str] = None):
         raise HTTPException(
             status_code=400,
             detail=f"Mã phiên không hợp lệ hoặc thuộc từ khóa định danh phiên dành riêng ('{target_id}')."
+        )
+    failure_marker = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.failed")
+    if os.path.exists(failure_marker):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Phiên '{target_id}' gặp lỗi trong quá trình xuất dữ liệu và không thể tải về artifact dở dang."
         )
     file_path = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.xlsx")
     if not os.path.exists(file_path):

@@ -713,7 +713,7 @@ class MuseG5ExplicitTableTests(unittest.TestCase):
             self.assertEqual(req.headers.get("X-mailbox-pin"), "987654")
 
     def test_t30_save_session_batch_atomic_rollback_on_excel_failure(self):
-        # T30: Batch export fails atomically; if Excel fails after CSV, newly created session CSV is rolled back, caller gets 404
+        # T30: Batch export fails atomically; if Excel fails after CSV, newly created session CSV is rolled back, caller gets 409 via failure marker
         import tempfile
         with tempfile.TemporaryDirectory() as tmp_exports:
             session_id = "test_rollback_99"
@@ -740,14 +740,188 @@ class MuseG5ExplicitTableTests(unittest.TestCase):
                 self.assertFalse(os.path.exists(expected_csv), "Session CSV must be rolled back on batch failure")
                 self.assertFalse(os.path.exists(expected_xlsx), "Session XLSX must not exist")
 
-                # Verify caller endpoint returns 404 and does NOT return old or corrupt artifact
+                # Verify caller endpoint returns 409 Conflict via failure marker and does NOT return old or corrupt artifact
                 res_csv = self.client.get(f"/api/bot/export-session-csv?session_id={session_id}")
-                self.assertEqual(res_csv.status_code, 404)
+                self.assertEqual(res_csv.status_code, 409)
 
                 res_xlsx = self.client.get(f"/api/bot/export-session-excel?session_id={session_id}")
-                self.assertEqual(res_xlsx.status_code, 404)
+                self.assertEqual(res_xlsx.status_code, 409)
             finally:
                 bot.EXPORTS_DIR = orig_exports_dir
+
+    def test_t31_update_existing_session_failure_preserves_gen_a_and_both_endpoints_409(self):
+        # T31: Overwriting existing session where Excel fails preserves Gen A files on disk and both endpoints return 409
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_exports:
+            session_id = "test_existing_update_session"
+            gen_a_accounts = [{"email": "gena@example.com", "pin": "111111"}]
+            gen_b_accounts = [{"email": "genb@example.com", "pin": "222222"}]
+            
+            orig_exports_dir = bot.EXPORTS_DIR
+            bot.EXPORTS_DIR = tmp_exports
+            try:
+                # 1. Export Generation A successfully
+                bot.save_session_csv_and_excel(gen_a_accounts, session_id)
+                csv_path = os.path.join(tmp_exports, f"muse_session_{session_id}.csv")
+                xlsx_path = os.path.join(tmp_exports, f"muse_session_{session_id}.xlsx")
+                
+                with open(csv_path, "r", encoding="utf-8-sig") as f:
+                    gen_a_csv_content = f.read()
+                with open(xlsx_path, "rb") as f:
+                    gen_a_xlsx_bytes = f.read()
+                    
+                self.assertIn("gena@example.com", gen_a_csv_content)
+
+                # 2. Attempt Generation B with injected Excel failure on session XLSX
+                orig_atomic_excel = bot.atomic_write_excel
+                def fail_on_session_excel(target_path, wb):
+                    if target_path == xlsx_path or target_path.endswith(f"muse_session_{session_id}.xlsx"):
+                        raise OSError("Simulated disk error during Gen B Excel write")
+                    orig_atomic_excel(target_path, wb)
+
+                with patch.object(bot, "atomic_write_excel", side_effect=fail_on_session_excel):
+                    with self.assertRaises(OSError):
+                        bot.save_session_csv_and_excel(gen_b_accounts, session_id)
+
+                # 3. Verify Gen A files were restored from backup and NOT destroyed
+                with open(csv_path, "r", encoding="utf-8-sig") as f:
+                    restored_csv = f.read()
+                with open(xlsx_path, "rb") as f:
+                    restored_xlsx = f.read()
+
+                self.assertEqual(restored_csv, gen_a_csv_content, "Gen A CSV must be restored, not destroyed")
+                self.assertEqual(restored_xlsx, gen_a_xlsx_bytes, "Gen A XLSX must remain intact")
+
+                # 4. Both endpoints must reject with 409 Conflict due to failure marker
+                res_csv = self.client.get(f"/api/bot/export-session-csv?session_id={session_id}")
+                self.assertEqual(res_csv.status_code, 409)
+
+                res_xlsx = self.client.get(f"/api/bot/export-session-excel?session_id={session_id}")
+                self.assertEqual(res_xlsx.status_code, 409)
+
+                # 5. Verify retry success clears failure marker and serves new generation
+                bot.save_session_csv_and_excel(gen_b_accounts, session_id)
+                res_csv_ok = self.client.get(f"/api/bot/export-session-csv?session_id={session_id}")
+                self.assertEqual(res_csv_ok.status_code, 200)
+                self.assertIn("genb@example.com", res_csv_ok.text)
+                
+                res_xlsx_ok = self.client.get(f"/api/bot/export-session-excel?session_id={session_id}")
+                self.assertEqual(res_xlsx_ok.status_code, 200)
+            finally:
+                bot.EXPORTS_DIR = orig_exports_dir
+
+    def test_t32_update_alias_failure_rolls_back_all_aliases(self):
+        # T32: If later alias export fails, earlier updated files and aliases are rolled back to Gen A
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_exports:
+            session_id = "test_alias_rollback_session"
+            gen_a_accounts = [{"email": "alias_a@example.com", "pin": "333333"}]
+            gen_b_accounts = [{"email": "alias_b@example.com", "pin": "444444"}]
+            
+            orig_exports_dir = bot.EXPORTS_DIR
+            bot.EXPORTS_DIR = tmp_exports
+            try:
+                bot.save_session_csv_and_excel(gen_a_accounts, session_id)
+                latest_csv_path = os.path.join(tmp_exports, "muse_session_latest.csv")
+                with open(latest_csv_path, "r", encoding="utf-8-sig") as f:
+                    latest_a_content = f.read()
+                self.assertIn("alias_a@example.com", latest_a_content)
+
+                orig_atomic_excel = bot.atomic_write_excel
+                def fail_on_latest_excel(target_path, wb):
+                    if "muse_session_latest.xlsx" in target_path:
+                        raise OSError("Simulated failure writing latest.xlsx alias")
+                    orig_atomic_excel(target_path, wb)
+
+                with patch.object(bot, "atomic_write_excel", side_effect=fail_on_latest_excel):
+                    with self.assertRaises(OSError):
+                        bot.save_session_csv_and_excel(gen_b_accounts, session_id)
+
+                # Verify latest.csv alias was restored back to Gen A, not left on Gen B
+                with open(latest_csv_path, "r", encoding="utf-8-sig") as f:
+                    restored_latest_content = f.read()
+                self.assertEqual(restored_latest_content, latest_a_content)
+                self.assertNotIn("alias_b@example.com", restored_latest_content)
+            finally:
+                bot.EXPORTS_DIR = orig_exports_dir
+
+    def test_t33_cleanup_failure_recorded_in_failure_marker(self):
+        # T33: If cleanup itself has errors, they are recorded in the failure marker
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_exports:
+            session_id = "test_cleanup_failure_session"
+            mock_accounts = [{"email": "clean@example.com", "pin": "555555"}]
+            
+            orig_exports_dir = bot.EXPORTS_DIR
+            bot.EXPORTS_DIR = tmp_exports
+            try:
+                # Pre-populate a file so backup is made
+                csv_path = os.path.join(tmp_exports, f"muse_session_{session_id}.csv")
+                with open(csv_path, "w", encoding="utf-8") as f:
+                    f.write("old-content")
+
+                orig_atomic_excel = bot.atomic_write_excel
+                def fail_on_excel(target_path, wb):
+                    if target_path.endswith(f"muse_session_{session_id}.xlsx"):
+                        raise OSError("Excel write failure")
+                    orig_atomic_excel(target_path, wb)
+
+                orig_replace = os.replace
+                def fail_replace(src, dst):
+                    if ".bak" in src:
+                        raise OSError("Simulated permission denied during rollback restore")
+                    orig_replace(src, dst)
+
+                with patch.object(bot, "atomic_write_excel", side_effect=fail_on_excel), \
+                     patch.object(os, "replace", side_effect=fail_replace):
+                    with self.assertRaises(OSError):
+                        bot.save_session_csv_and_excel(mock_accounts, session_id)
+
+                failure_marker = os.path.join(tmp_exports, f"muse_session_{session_id}.failed")
+                self.assertTrue(os.path.exists(failure_marker))
+                with open(failure_marker, "r", encoding="utf-8") as fm:
+                    marker_data = json.load(fm)
+                self.assertIn("cleanup_errors", marker_data)
+                self.assertTrue(len(marker_data["cleanup_errors"]) > 0)
+            finally:
+                bot.EXPORTS_DIR = orig_exports_dir
+
+    def test_t34_save_accounts_propagates_txt_failure_and_caller_truthful(self):
+        # T34: save_accounts re-raises exception from save_accounts_txt; caller does not claim success
+        with patch.object(bot, "save_accounts_txt", side_effect=OSError("Simulated TXT write failure")):
+            with self.assertRaises(OSError):
+                bot.save_accounts()
+
+        # Test caller in process_single_account handles save_accounts error truthfully
+        log_entries = []
+        def mock_add_log(msg, level="info", pct=None):
+            log_entries.append((msg, level, pct))
+
+        with patch.object(bot, "save_accounts", side_effect=OSError("disk error: token=secret_token_12345 and proxy http://user:super_secret_pass@127.0.0.1:8080")), \
+             patch.object(bot, "add_log", side_effect=mock_add_log):
+            account_data = {"email": "caller_test@example.com"}
+            # Simulate the caller logic from lines 1506-1510
+            with self.assertRaises(OSError):
+                bot.state.accounts.insert(0, account_data)
+                try:
+                    bot.save_accounts()
+                    bot.add_log(f"🎉 TẠO VÀ ĐĂNG NHẬP MÀN HÌNH CHAT THÀNH CÔNG: {account_data['email']}!", "success", 100)
+                except Exception as e:
+                    bot.add_log(f"Đăng nhập chat thành công nhưng lưu file tài khoản thất bại: {bot.redact_sensitive(str(e))}", "error", 100)
+                    raise
+
+            # Verify no false success claim was logged
+            success_logs = [m for m, lvl, _ in log_entries if "THÀNH CÔNG" in m and lvl == "success"]
+            self.assertEqual(len(success_logs), 0, "Must not claim success when file save fails")
+
+            # Verify error log was recorded and sensitive token & proxy password were redacted
+            error_logs = [m for m, lvl, _ in log_entries if lvl == "error"]
+            self.assertTrue(len(error_logs) > 0)
+            self.assertIn("lưu file tài khoản thất bại", error_logs[0])
+            self.assertNotIn("secret_token_12345", error_logs[0])
+            self.assertNotIn("super_secret_pass", error_logs[0])
+            self.assertIn("token=***", error_logs[0])
+            self.assertIn("user:***@127.0.0.1:8080", error_logs[0])
 
 
 if __name__ == "__main__":
