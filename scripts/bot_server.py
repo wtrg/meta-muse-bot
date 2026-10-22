@@ -288,10 +288,17 @@ def check_route_ip(proxy_str: Optional[str] = None) -> Dict[str, Any]:
     return {"ok": False, "error": last_err}
 
 
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
+
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8787")
-ACCOUNTS_FILE = os.path.join(os.path.dirname(__file__), "muse_accounts.json")
-SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "screenshots")
-EXPORTS_DIR = os.path.join(os.path.dirname(__file__), "exports")
+ACCOUNTS_FILE = os.environ.get("ACCOUNTS_FILE", os.path.join(SCRIPTS_DIR, "muse_accounts.json"))
+SCREENSHOTS_DIR = os.environ.get("SCREENSHOTS_DIR", os.path.join(SCRIPTS_DIR, "screenshots"))
+EXPORTS_DIR = os.environ.get("EXPORTS_DIR", os.path.join(SCRIPTS_DIR, "exports"))
+ACCOUNTS_TXT_PATH = os.environ.get("ACCOUNTS_TXT_PATH", os.path.join(SCRIPTS_DIR, "muse_accounts.txt"))
+ROOT_ACCOUNTS_TXT_PATH = os.environ.get("ROOT_ACCOUNTS_TXT_PATH", os.path.join(PROJECT_ROOT, "muse_accounts.txt"))
+ROOT_LATEST_CSV_PATH = os.environ.get("ROOT_LATEST_CSV_PATH", os.path.join(PROJECT_ROOT, "muse_session_latest.csv"))
+ROOT_LATEST_EXCEL_PATH = os.environ.get("ROOT_LATEST_EXCEL_PATH", os.path.join(PROJECT_ROOT, "muse_session_latest.xlsx"))
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 os.makedirs(EXPORTS_DIR, exist_ok=True)
 
@@ -462,8 +469,8 @@ def atomic_write_excel(target_path: str, wb: Any):
 def save_accounts_txt():
     tunnel_url = get_effective_portal_url()
     is_public = bool(get_public_tunnel_url())
-    txt_path = os.path.join(os.path.dirname(__file__), "muse_accounts.txt")
-    root_txt_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_accounts.txt")
+    txt_path = globals().get("ACCOUNTS_TXT_PATH", os.path.join(os.path.dirname(__file__), "muse_accounts.txt"))
+    root_txt_path = globals().get("ROOT_ACCOUNTS_TXT_PATH", os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_accounts.txt"))
     
     ready_accounts = [a for a in state.accounts if a.get("status") == "SUCCESS_CHAT_READY"]
     failed_accounts = [a for a in state.accounts if a.get("status") != "SUCCESS_CHAT_READY"]
@@ -543,6 +550,18 @@ def save_accounts():
         print(f"Error saving accounts: {safe_err}")
         raise
 
+def commit_account_and_log_success(account_data: Dict[str, Any]) -> None:
+    email = account_data.get("email", "")
+    state.accounts.insert(0, account_data)
+    try:
+        save_accounts()
+        add_log(f"🎉 TẠO VÀ ĐĂNG NHẬP MÀN HÌNH CHAT THÀNH CÔNG: {email}!", "success", 100)
+    except Exception as e:
+        redact_fn = globals().get("redact_sensitive")
+        safe_err = redact_fn(str(e)) if redact_fn else str(e)
+        add_log(f"Đăng nhập chat thành công nhưng lưu file tài khoản thất bại: {safe_err}", "error", 100)
+        raise
+
 def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_id: str):
     if not session_id:
         session_id = time.strftime("%Y%m%d_%H%M%S")
@@ -566,9 +585,10 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
     latest_csv_path = os.path.join(EXPORTS_DIR, "muse_session_latest.csv")
     latest_excel_path = os.path.join(EXPORTS_DIR, "muse_session_latest.xlsx")
     
-    root_latest_csv = os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_session_latest.csv")
-    root_latest_excel = os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_session_latest.xlsx")
+    root_latest_csv = globals().get("ROOT_LATEST_CSV_PATH", os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_session_latest.csv"))
+    root_latest_excel = globals().get("ROOT_LATEST_EXCEL_PATH", os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_session_latest.xlsx"))
     
+    pending_marker = os.path.join(EXPORTS_DIR, f"muse_session_{session_id}.pending")
     failure_marker = os.path.join(EXPORTS_DIR, f"muse_session_{session_id}.failed")
     targets = [
         session_csv_path,
@@ -579,22 +599,7 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
         root_latest_excel
     ]
 
-    import shutil
-    batch_token = f"{session_id}_{os.getpid()}_{int(time.time() * 1000)}"
-    existing_backups = {}
-    for target in targets:
-        target_abs = os.path.abspath(target)
-        if os.path.exists(target_abs) and target_abs not in existing_backups:
-            target_dir = os.path.dirname(target_abs)
-            os.makedirs(target_dir, exist_ok=True)
-            bak_path = target_abs + f".bak_{batch_token}"
-            try:
-                shutil.copy2(target_abs, bak_path)
-                existing_backups[target_abs] = bak_path
-            except Exception:
-                pass
-
-    # Build Excel Workbook in memory first to validate openpyxl before touching any files on disk
+    # Pre-publication dependency/build boundary: validate data & build workbook in-memory first
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
     
@@ -625,6 +630,55 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
     ws.column_dimensions['B'].width = 34
     ws.column_dimensions['C'].width = 16
     ws.column_dimensions['D'].width = 85
+
+    # Identify existing published targets before publication begins
+    existed_targets = set()
+    for target in targets:
+        target_abs = os.path.abspath(target)
+        if os.path.exists(target_abs):
+            existed_targets.add(target_abs)
+
+    # Establish durable in-progress gate BEFORE mutating any published data
+    try:
+        with open(pending_marker, "w", encoding="utf-8") as pm:
+            json.dump({
+                "session_id": session_id,
+                "state": "pending",
+                "started_at": time.strftime("%Y-%m-%d %H:%M:%S")
+            }, pm, ensure_ascii=False)
+    except Exception as gate_err:
+        raise OSError(f"Cannot establish publication gate for session '{session_id}': {gate_err}") from gate_err
+
+    # Mandatory backup of all pre-existing targets; if ANY fails, abort before mutation
+    import shutil
+    batch_token = f"{session_id}_{os.getpid()}_{int(time.time() * 1000)}"
+    existing_backups = {}
+    for target_abs in existed_targets:
+        target_dir = os.path.dirname(target_abs)
+        os.makedirs(target_dir, exist_ok=True)
+        bak_path = target_abs + f".bak_{batch_token}"
+        try:
+            shutil.copy2(target_abs, bak_path)
+            existing_backups[target_abs] = bak_path
+        except Exception as bak_exc:
+            # Clean up partial backups created in this batch
+            for created_bak in list(existing_backups.values()):
+                if os.path.exists(created_bak):
+                    try:
+                        os.remove(created_bak)
+                    except OSError:
+                        pass
+            # Mark failure so endpoints reject incomplete attempts
+            try:
+                with open(failure_marker, "w", encoding="utf-8") as fm:
+                    json.dump({
+                        "session_id": session_id,
+                        "failed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "error": f"Required backup failed: {bak_exc}"
+                    }, fm, ensure_ascii=False)
+            except Exception:
+                pass
+            raise OSError(f"Required backup failed for {target_abs}, aborting export before mutation: {bak_exc}") from bak_exc
 
     written_files = []
     try:
@@ -663,8 +717,18 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
                 os.remove(failure_marker)
             except OSError:
                 pass
+
+        # Xóa pending marker (durable gate); writer must agree with download readiness
+        if os.path.exists(pending_marker):
+            try:
+                os.remove(pending_marker)
+            except Exception as clear_err:
+                raise OSError(f"Could not clear pending marker: {clear_err}") from clear_err
     except Exception as exc:
         cleanup_errors = []
+        failed_restore_backups = set()
+        successful_restore_backups = set()
+
         # 1. Tạo failure marker để các download endpoints từ chối với status 409
         try:
             with open(failure_marker, "w", encoding="utf-8") as fm:
@@ -682,9 +746,10 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
                 bak = existing_backups[p]
                 try:
                     os.replace(bak, p)
-                    existing_backups.pop(p, None)
+                    successful_restore_backups.add(bak)
                 except Exception as restore_err:
                     cleanup_errors.append(f"Failed to restore {p} from backup: {restore_err}")
+                    failed_restore_backups.add(bak)
             else:
                 try:
                     if os.path.exists(p):
@@ -692,20 +757,27 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
                 except Exception as del_err:
                     cleanup_errors.append(f"Failed to remove newly written file {p}: {del_err}")
 
-        # 3. Dọn dẹp các backup còn lại
-        for bak in list(existing_backups.values()):
+        # 3. Dọn dẹp backup: TUYỆT ĐỐI KHÔNG xóa các backup phục hồi thất bại
+        for p, bak in list(existing_backups.items()):
+            if bak in failed_restore_backups:
+                continue  # BẢO TỒN BACKUP PHỤC VỤ RECOVERY!
+            if p in written_files and bak not in successful_restore_backups:
+                continue  # BẢO TỒN NẾU CHƯA RESTORE THÀNH CÔNG
             try:
                 if os.path.exists(bak):
                     os.remove(bak)
             except Exception as bak_err:
                 cleanup_errors.append(f"Failed to remove backup {bak}: {bak_err}")
 
-        # 4. Ghi nhận lỗi cleanup vào failure marker nếu có
-        if cleanup_errors and os.path.exists(failure_marker):
+        # 4. Ghi nhận lỗi cleanup và danh sách backup phục hồi vào failure marker nếu có
+        if os.path.exists(failure_marker):
             try:
                 with open(failure_marker, "r+", encoding="utf-8") as fm:
                     data = json.load(fm)
-                    data["cleanup_errors"] = cleanup_errors
+                    if cleanup_errors:
+                        data["cleanup_errors"] = cleanup_errors
+                    if failed_restore_backups:
+                        data["recovery_backups"] = list(failed_restore_backups)
                     fm.seek(0)
                     json.dump(data, fm, ensure_ascii=False)
                     fm.truncate()
@@ -1507,13 +1579,7 @@ async def process_single_account(
             "requirementsComplete": not clean_invite or invitation["status"] == "REDEEMED"
         }
         
-        state.accounts.insert(0, account_data)
-        try:
-            save_accounts()
-            add_log(f"🎉 TẠO VÀ ĐĂNG NHẬP MÀN HÌNH CHAT THÀNH CÔNG: {email}!", "success", 100)
-        except Exception as e:
-            add_log(f"Đăng nhập chat thành công nhưng lưu file tài khoản thất bại: {redact_sensitive(str(e))}", "error", 100)
-            raise
+        commit_account_and_log_success(account_data)
         
         if visible:
             await asyncio.sleep(3)
@@ -2304,10 +2370,11 @@ async def export_session_csv(session_id: Optional[str] = None):
             detail=f"Mã phiên không hợp lệ hoặc thuộc từ khóa định danh phiên dành riêng ('{target_id}')."
         )
     failure_marker = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.failed")
-    if os.path.exists(failure_marker):
+    pending_marker = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.pending")
+    if os.path.exists(failure_marker) or os.path.exists(pending_marker):
         raise HTTPException(
             status_code=409,
-            detail=f"Phiên '{target_id}' gặp lỗi trong quá trình xuất dữ liệu và không thể tải về artifact dở dang."
+            detail=f"Phiên '{target_id}' gặp lỗi hoặc đang trong quá trình xuất dữ liệu và không thể tải về artifact."
         )
     file_path = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.csv")
     if not os.path.exists(file_path):
@@ -2335,10 +2402,11 @@ async def export_session_excel(session_id: Optional[str] = None):
             detail=f"Mã phiên không hợp lệ hoặc thuộc từ khóa định danh phiên dành riêng ('{target_id}')."
         )
     failure_marker = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.failed")
-    if os.path.exists(failure_marker):
+    pending_marker = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.pending")
+    if os.path.exists(failure_marker) or os.path.exists(pending_marker):
         raise HTTPException(
             status_code=409,
-            detail=f"Phiên '{target_id}' gặp lỗi trong quá trình xuất dữ liệu và không thể tải về artifact dở dang."
+            detail=f"Phiên '{target_id}' gặp lỗi hoặc đang trong quá trình xuất dữ liệu và không thể tải về artifact."
         )
     file_path = os.path.join(EXPORTS_DIR, f"muse_session_{target_id}.xlsx")
     if not os.path.exists(file_path):
