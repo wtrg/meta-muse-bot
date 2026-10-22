@@ -112,7 +112,35 @@ export const BulkCreatePage = () => {
               </div>
             </div>
 
-            <div className="pt-4 flex flex-wrap gap-3">
+            <div className="rounded-lg border border-border/80 bg-muted/30 p-4 space-y-2 text-xs text-muted-foreground">
+              <div className="font-semibold text-foreground text-sm">
+                📋 Quy trình tạo và sử dụng hộp thư chính thức:
+              </div>
+              <ul className="list-disc pl-4 space-y-1">
+                <li>
+                  <strong>Tạo hộp thư có xác thực:</strong> Đăng nhập tài khoản và tạo từng hộp thư trong tổ chức tại{" "}
+                  <Link to="/addresses" className="underline font-medium text-primary">
+                    Trang Quản Lý Hộp Thư (/addresses)
+                  </Link>
+                  .
+                </li>
+                <li>
+                  <strong>Mã PIN bảo mật một lần:</strong> Bật tùy chọn &quot;Generate a mailbox PIN&quot; khi tạo. Mã PIN chỉ hiển thị một lần duy nhất sau khi tạo và cần được tự lưu lại.
+                </li>
+                <li>
+                  <strong>Giới hạn tra cứu OTP:</strong> Cổng tra cứu công khai{" "}
+                  <Link to="/otp" className="underline font-medium text-primary">
+                    /otp
+                  </Link>{" "}
+                  giới hạn 10 lượt/phút cho mỗi hộp thư và 30 lượt/phút cho mỗi IP để chống tấn công đoán mã.
+                </li>
+                <li>
+                  <strong>Khả năng nhận thư:</strong> Việc đồng bộ thư phụ thuộc vào nhà cung cấp trực tiếp; hệ thống không đảm bảo 100% hay cam kết đăng ký thành công trên các dịch vụ bên thứ ba.
+                </li>
+              </ul>
+            </div>
+
+            <div className="pt-2 flex flex-wrap gap-3">
               <Link
                 to="/addresses"
                 className={buttonVariants({ variant: "default", className: "font-medium" })}

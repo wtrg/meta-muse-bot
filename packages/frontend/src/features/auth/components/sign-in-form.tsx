@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Link } from "react-router";
 import { useForm } from "@tanstack/react-form";
 import { InformationCircleIcon } from "@/lib/hugeicons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -8,7 +9,6 @@ import {
   Field,
   FieldError,
   FieldGroup,
-  FieldSeparator,
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -252,27 +252,18 @@ export const SignInForm = ({
     >
       <FieldGroup className="gap-6">
         {!isForgotPasswordMode ? (
-          <>
-            <Field className="space-y-2">
-              <a
-                href="/api/public/auto-login"
-                className="flex items-center justify-center gap-2 w-full h-11 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm transition-colors shadow-sm"
-              >
-                <span>⚡ Đăng Nhập 1-Click Vào Reg Mail & Bắt OTP (/bulk)</span>
-              </a>
-              <div className="flex items-center justify-between text-xs text-muted-foreground px-0.5">
-                <a href="/bulk" className="text-primary hover:underline font-medium">
-                  👉 Mở thẳng trang Reg Mail (/bulk)
-                </a>
-                <a href="/otp" target="_blank" className="hover:underline">
-                  Trang lấy OTP khách (/otp) ↗
-                </a>
-              </div>
-            </Field>
-            <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card text-muted-foreground">
-              Hoặc đăng nhập bằng tài khoản
-            </FieldSeparator>
-          </>
+          <div className="rounded-lg border border-border/70 bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+            <div className="font-medium text-foreground">
+              Tra cứu mã OTP công khai?
+            </div>
+            <div>
+              Nếu bạn chỉ cần tra cứu mã OTP từ một hộp thư đã có mã PIN, vui lòng mở{" "}
+              <Link to="/otp" className="text-primary underline font-medium">
+                Cổng Tra Cứu OTP (/otp) ↗
+              </Link>
+              . Đăng nhập bên dưới chỉ dành cho người dùng quản lý hộp thư.
+            </div>
+          </div>
         ) : (
           <p className="text-sm text-muted-foreground">
             Enter your account email and we&apos;ll send you a password reset

@@ -431,4 +431,29 @@ describe("PublicOtpPage request lifecycle", () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("renders authenticated /addresses link and no /bulk link for local dev domain empty inbox", async () => {
+    const localDevResponse = new Response(
+      JSON.stringify({
+        ok: true,
+        hasEmails: false,
+        isLocalDevDomain: true,
+        message: "Chưa có thư mới nào gửi đến.",
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(localDevResponse);
+
+    await mount();
+
+    const addressesLinks = screen.getAllByRole("link", {
+      name: /Trang Quản Lý Hộp Thư/i,
+    });
+    expect(addressesLinks.length).toBeGreaterThanOrEqual(1);
+    for (const link of addressesLinks) {
+      expect(link.getAttribute("href")).toBe("/addresses");
+    }
+    expect(screen.queryByRole("link", { name: /bulk/i })).toBeNull();
+  });
 });

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -274,10 +274,10 @@ export const PublicOtpPage = () => {
             <span>⚡ HỆ THỐNG LẤY OTP TỰ ĐỘNG</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-            Lấy Mã OTP Muse.ai
+            Tra Cứu Mã OTP Hộp Thư
           </h1>
           <p className="text-sm text-muted-foreground">
-            Nhập email và mã PIN để lấy mã xác thực hoặc link đăng nhập mới
+            Nhập email và mã PIN bảo mật để lấy mã xác thực hoặc link đăng nhập mới
             nhất.
           </p>
         </div>
@@ -289,8 +289,7 @@ export const PublicOtpPage = () => {
               Thông tin hòm thư
             </CardTitle>
             <CardDescription className="text-xs">
-              Mã PIN giúp bảo vệ hòm thư, chỉ người có mã mới xem được OTP của
-              tài khoản này.
+              Mã PIN do người tạo hộp thư thiết lập tại trang quản lý. Hệ thống giới hạn 10 lần tra cứu/phút/hộp thư và 30 lần/phút/IP.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -301,7 +300,7 @@ export const PublicOtpPage = () => {
               <Input
                 aria-label="Địa chỉ Email"
                 type="email"
-                placeholder="ví dụ: muse_user01@domain.com"
+                placeholder="ví dụ: user01@domain.com"
                 value={email}
                 onChange={e => {
                   clearMailbox();
@@ -379,11 +378,11 @@ export const PublicOtpPage = () => {
                 <CardContent className="pt-6 text-center space-y-2">
                   <div className="text-2xl">⏳</div>
                   <h3 className="font-semibold text-sm text-foreground">
-                    Đang chờ Muse.ai gửi mã xác thực...
+                    Đang chờ thư xác thực mới...
                   </h3>
                   <p className="text-xs text-muted-foreground max-w-md mx-auto">
                     {data.message ||
-                      "Chưa có thư mới nào gửi đến. Vui lòng bấm gửi mã OTP trên trang Muse.ai, sau đó quay lại trang này (hệ thống sẽ tự nhận mã)."}
+                      "Chưa có thư mới nào gửi đến. Vui lòng bấm gửi mã OTP trên dịch vụ bạn đang thao tác, sau đó quay lại trang này (hệ thống sẽ tự nhận mã khi có thư đến)."}
                   </p>
                   {data.isLocalDevDomain && (
                     <div className="mt-4 p-3 rounded-lg bg-amber-500/15 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-300 text-left max-w-lg mx-auto space-y-1.5">
@@ -392,21 +391,18 @@ export const PublicOtpPage = () => {
                       </div>
                       <div>
                         Email này mang đuôi <code>@spinupmail.dev</code> (tên
-                        miền thử nghiệm nội bộ local). Máy chủ Muse.ai trên
-                        internet không thể gửi thư tới máy tính của bạn qua tên
-                        miền này.
+                        miền thử nghiệm nội bộ local). Máy chủ gửi thư từ internet
+                        không thể chuyển tiếp thư tới tên miền thử nghiệm nội bộ này.
                       </div>
                       <div className="pt-1 font-medium">
-                        👉 <strong>Giải pháp:</strong> Hãy sang{" "}
-                        <a
-                          href="/bulk"
+                        👉 <strong>Giải pháp:</strong> Đăng nhập và tạo hộp thư với tên miền công khai tại{" "}
+                        <Link
+                          to="/addresses"
                           className="underline font-bold text-primary"
                         >
-                          Trang Tạo Mail Hàng Loạt (/bulk)
-                        </a>{" "}
-                        và chọn đuôi <strong>@maxxspace.com</strong> (Email THẬT
-                        nhận được từ internet 100%) để đăng ký tài khoản
-                        Muse.ai!
+                          Trang Quản Lý Hộp Thư (/addresses)
+                        </Link>
+                        . Lưu ý: dịch vụ nhận thư phụ thuộc vào nhà cung cấp trực tiếp; hệ thống không cam kết tỷ lệ 100% hay bảo đảm đăng ký thành công trên mọi dịch vụ bên thứ ba.
                       </div>
                     </div>
                   )}
@@ -468,7 +464,7 @@ export const PublicOtpPage = () => {
                   {isSafeHttpUrl(data.latest?.magicLink) && (
                     <div className="p-3.5 rounded-lg border border-blue-500/30 bg-blue-500/10 space-y-2 text-center">
                       <p className="text-xs font-medium text-blue-600 dark:text-blue-400">
-                        🔗 Phát hiện đường link xác thực Muse.ai:
+                        🔗 Phát hiện đường link kích hoạt / đăng nhập:
                       </p>
                       <a
                         href={data.latest!.magicLink!}
@@ -476,7 +472,7 @@ export const PublicOtpPage = () => {
                         rel="noopener noreferrer"
                         className="inline-block w-full sm:w-auto px-4 py-2 rounded-md bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-colors"
                       >
-                        Mở link kích hoạt tài khoản Muse.ai ↗
+                        Mở link kích hoạt tài khoản ↗
                       </a>
                     </div>
                   )}
@@ -519,15 +515,21 @@ export const PublicOtpPage = () => {
         {/* Quick link sharing tip */}
         <div className="p-3.5 rounded-lg border border-border/70 bg-card/60 text-xs text-muted-foreground space-y-2">
           <p className="font-semibold text-foreground">
-            💡 Dành cho người bán / chia sẻ tài khoản:
+            💡 Dành cho người quản lý / chia sẻ hộp thư:
           </p>
           <p>
-            Bạn có thể gửi cho khách link hòm thư an toàn dạng:
+            Hộp thư cần được tạo bởi người dùng đăng nhập tại{" "}
+            <Link to="/addresses" className="underline font-medium text-primary">
+              Trang Quản Lý Hộp Thư (/addresses)
+            </Link>{" "}
+            với tùy chọn tạo PIN bảo mật (lưu PIN ngay khi tạo, không hiển thị lại).
+            <br />
+            Bạn có thể gửi cho người nhận link tra cứu an toàn dạng:
             <br />
             <code className="text-primary font-mono text-[11px] block mt-1 p-1 bg-muted rounded truncate">
-              {window.location.origin}/otp?mail={email || "acc01@domain.com"}
+              {window.location.origin}/otp?mail={email || "user01@domain.com"}
             </code>
-            (Người nhận chỉ cần nhập thêm mã PIN bí mật được cấp riêng).
+            (Người nhận cần nhập thêm mã PIN bí mật được cấp riêng. Giới hạn: 10 lần/phút/hộp thư, 30 lần/phút/IP).
           </p>
           <div className="flex gap-2 pt-1">
             <Button

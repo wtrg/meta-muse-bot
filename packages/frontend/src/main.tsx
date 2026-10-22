@@ -79,14 +79,14 @@ const routes: RouteObject[] = [
     hydrateFallbackElement: hydrationFallbackElement,
     element: <PublicOtpPage />,
     errorElement: <RouteErrorPage />,
-    handle: { title: "Lấy mã OTP Muse.ai" },
+    handle: { title: "Tra Cứu Mã OTP Hộp Thư" },
   },
   {
     path: "/bulk",
     hydrateFallbackElement: hydrationFallbackElement,
     element: <BulkCreatePage />,
     errorElement: <RouteErrorPage />,
-    handle: { title: "Tạo Email Hàng Loạt & Bắt OTP" },
+    handle: { title: "Thông Báo Cổng Tạo Mail Hàng Loạt" },
   },
   {
     path: "/muse",

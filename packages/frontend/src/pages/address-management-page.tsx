@@ -74,12 +74,23 @@ export const AddressManagementPage = () => {
         </p>
       ) : null}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 rounded-lg bg-primary/10 border border-primary/20 max-w-3xl">
-        <div>
-          <div className="text-sm font-semibold text-primary">⚡ Tạo Email Hàng Loạt & Quét OTP Muse.ai / Meta</div>
-          <div className="text-xs text-muted-foreground">Tạo nhanh 5–50 mail kèm mã PIN riêng và bảng trích xuất OTP tự động.</div>
+        <div className="space-y-0.5">
+          <div className="text-sm font-semibold text-primary">
+            Hòm Thư Bảo Mật & Cổng Tra Cứu OTP Công Khai
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Bật tùy chọn &quot;Generate a mailbox PIN&quot; khi tạo hòm thư để cấp quyền tra cứu tại cổng OTP. Hãy tự lưu mã PIN ngay khi tạo vì hệ thống không hiển thị lại sau khi đóng.
+          </div>
         </div>
-        <Link to="/bulk" className={buttonVariants({ size: "sm", className: "shrink-0" })}>
-          Mở Trang Reg Mail (/bulk) ↗
+        <Link
+          to="/otp"
+          className={buttonVariants({
+            size: "sm",
+            variant: "outline",
+            className: "shrink-0",
+          })}
+        >
+          Mở Cổng OTP (/otp) ↗
         </Link>
       </div>
 

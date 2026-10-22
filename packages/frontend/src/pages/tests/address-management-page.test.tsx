@@ -215,4 +215,37 @@ describe("AddressManagementPage", () => {
       "addresses-list"
     );
   });
+
+  it("links to /otp and does not link to deprecated /bulk route", () => {
+    mockedUseAuth.mockReturnValue({
+      user: { id: "user-1" },
+      activeOrganizationId: "org-1",
+    } as unknown as ReturnType<typeof useAuth>);
+    mockedUseActiveOrganizationQuery.mockReturnValue({
+      data: {
+        id: "org-1",
+        members: [{ role: "owner", user: { id: "user-1" } }],
+      },
+    } as unknown as ReturnType<typeof useActiveOrganizationQuery>);
+    mockedUseIntegrationsQuery.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof useIntegrationsQuery>);
+    mockedUseDomainsQuery.mockReturnValue({
+      data: { items: [] },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof useDomainsQuery>);
+
+    render(
+      <MemoryRouter>
+        <AddressManagementPage />
+      </MemoryRouter>
+    );
+
+    const otpLink = screen.getByRole("link", { name: /Mở Cổng OTP/i });
+    expect(otpLink.getAttribute("href")).toBe("/otp");
+    expect(screen.queryByRole("link", { name: /bulk/i })).toBeNull();
+  });
 });
