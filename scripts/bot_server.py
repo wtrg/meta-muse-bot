@@ -3,6 +3,7 @@ import sys
 import time
 import json
 import asyncio
+import tempfile
 from contextlib import asynccontextmanager
 import csv
 import subprocess
@@ -365,33 +366,113 @@ state.session_accounts = []
 state.session_id = ""
 state.session_time = ""
 
-def get_public_tunnel_url() -> str:
+def validate_tunnel_url(url_str: str) -> Optional[str]:
+    if not url_str or not isinstance(url_str, str):
+        return None
+    url = url_str.strip()
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme not in ("http", "https"):
+            return None
+        if not parsed.hostname:
+            return None
+        if parsed.hostname in ("127.0.0.1", "localhost", "0.0.0.0", "::1"):
+            return None
+        if not re.match(r'^[a-zA-Z0-9.-]+$', parsed.hostname):
+            return None
+        return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    except Exception:
+        return None
+
+def get_public_tunnel_url() -> Optional[str]:
     env_url = os.environ.get("PUBLIC_TUNNEL_URL", "").strip()
-    if env_url:
-        return env_url.rstrip("/")
+    valid_env = validate_tunnel_url(env_url)
+    if valid_env:
+        return valid_env
+
     tunnel_file = os.path.join(os.path.dirname(__file__), "active_tunnel_url.txt")
     if os.path.exists(tunnel_file):
         try:
             with open(tunnel_file, "r", encoding="utf-8") as f:
                 content = f.read().strip()
-                if content.startswith("http"):
-                    return content.rstrip("/")
+                valid_file = validate_tunnel_url(content)
+                if valid_file:
+                    return valid_file
         except Exception:
             pass
-    return "http://127.0.0.1:5173"
+    return None
+
+def get_effective_portal_url() -> str:
+    return get_public_tunnel_url() or "http://127.0.0.1:5173"
+
+def atomic_write_text(target_path: str, content: str, encoding: str = "utf-8"):
+    target_dir = os.path.dirname(os.path.abspath(target_path))
+    os.makedirs(target_dir, exist_ok=True)
+    temp_fd, temp_path = tempfile.mkstemp(dir=target_dir, prefix="tmp_txt_")
+    try:
+        with open(temp_fd, "w", encoding=encoding) as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, target_path)
+    except Exception:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise
+
+def atomic_write_csv(target_path: str, headers: List[str], rows: List[List[Any]], encoding: str = "utf-8-sig"):
+    target_dir = os.path.dirname(os.path.abspath(target_path))
+    os.makedirs(target_dir, exist_ok=True)
+    temp_fd, temp_path = tempfile.mkstemp(dir=target_dir, prefix="tmp_csv_")
+    try:
+        with open(temp_fd, "w", newline="", encoding=encoding) as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            writer.writerows(rows)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, target_path)
+    except Exception:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise
+
+def atomic_write_excel(target_path: str, wb: Any):
+    target_dir = os.path.dirname(os.path.abspath(target_path))
+    os.makedirs(target_dir, exist_ok=True)
+    temp_fd, temp_path = tempfile.mkstemp(dir=target_dir, prefix="tmp_xlsx_", suffix=".xlsx")
+    try:
+        os.close(temp_fd)
+        wb.save(temp_path)
+        os.replace(temp_path, target_path)
+    except Exception:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise
 
 def save_accounts_txt():
-    tunnel_url = get_public_tunnel_url()
+    tunnel_url = get_effective_portal_url()
+    is_public = bool(get_public_tunnel_url())
     txt_path = os.path.join(os.path.dirname(__file__), "muse_accounts.txt")
     root_txt_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_accounts.txt")
     
     ready_accounts = [a for a in state.accounts if a.get("status") == "SUCCESS_CHAT_READY"]
     failed_accounts = [a for a in state.accounts if a.get("status") != "SUCCESS_CHAT_READY"]
     
+    portal_label = "Trang Lấy OTP Trực Tuyến (Public)" if is_public else "Trang Lấy OTP Nội Bộ (Local)"
     lines = [
         "================================================================================",
         "DANH SÁCH TÀI KHOẢN MUSE.AI & MÃ PIN LẤY OTP ĐĂNG NHẬP (CHAT SẴN SÀNG)",
-        f"Trang Lấy OTP Trực Tuyến: {tunnel_url}/otp",
+        f"{portal_label}: {tunnel_url}/otp",
         "================================================================================",
         ""
     ]
@@ -406,7 +487,7 @@ def save_accounts_txt():
             email = acc.get("email", "")
             pin = acc.get("pin", "") or ""
             otp_link = f"{tunnel_url}/otp?email={urllib.parse.quote(email)}"
-            proxy = acc.get("proxy_used", "Không dùng")
+            proxy = sanitize_proxy_display(acc.get("proxy_used", "Không dùng"))
             lines.append(f"[{idx}] TÀI KHOẢN: {email}")
             lines.append(f"  • Email đăng nhập: {email}")
             lines.append(f"  • Mã PIN xem OTP : {pin}")
@@ -439,16 +520,18 @@ def save_accounts_txt():
         lines.append("(Các tài khoản này bị Meta gắn nhãn Waitlist do IP tạo không đạt chuẩn US)")
         lines.append("================================================================================")
         for idx, acc in enumerate(failed_accounts, 1):
-            lines.append(f"• {acc.get('email')} | Proxy: {acc.get('proxy_used')} | Trạng thái: {acc.get('status')}")
+            clean_proxy = sanitize_proxy_display(acc.get("proxy_used"))
+            clean_err = redact_sensitive(str(acc.get("error"))) if acc.get("error") else ""
+            err_suffix = f" | Lỗi: {clean_err}" if clean_err else ""
+            lines.append(f"• {acc.get('email')} | Proxy: {clean_proxy} | Trạng thái: {acc.get('status')}{err_suffix}")
 
     content = "\n".join(lines)
     try:
-        with open(txt_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        with open(root_txt_path, "w", encoding="utf-8") as f:
-            f.write(content)
+        atomic_write_text(txt_path, content)
+        atomic_write_text(root_txt_path, content)
     except Exception as e:
         print("Error saving txt:", e)
+        raise
 
 def save_accounts():
     try:
@@ -461,13 +544,8 @@ def save_accounts():
 def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_id: str):
     if not session_id:
         session_id = time.strftime("%Y%m%d_%H%M%S")
-    tunnel_url = get_public_tunnel_url()
+    tunnel_url = get_effective_portal_url()
     
-    # 4 cột đúng chuẩn yêu cầu người dùng:
-    # Cột 1: STT
-    # Cột 2: Email
-    # Cột 3: Mã PIN
-    # Cột 4: Trang Web Lấy OTP Đăng Nhập
     headers = ["STT", "Email", "Mã PIN", "Trang Web Lấy OTP Đăng Nhập"]
     rows = []
     for idx, acc in enumerate(session_accounts, 1):
@@ -488,62 +566,63 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
     root_latest_csv = os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_session_latest.csv")
     root_latest_excel = os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_session_latest.xlsx")
     
-    # Ghi File CSV kèm UTF-8 BOM (\ufeff / utf-8-sig) để Excel mở không lỗi font
-    try:
-        for p in [session_csv_path, latest_csv_path, root_latest_csv]:
-            with open(p, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
-                writer.writerows(rows)
-    except Exception as e:
-        print("Error writing CSV session:", e)
+    # 1. Ghi File CSV nguyên tử kèm UTF-8 BOM (\ufeff / utf-8-sig)
+    for p in [session_csv_path, latest_csv_path, root_latest_csv]:
+        atomic_write_csv(p, headers, rows)
         
-    # Ghi File Excel (.xlsx) chuẩn openpyxl
-    try:
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
+    # 2. Ghi File Excel (.xlsx) chuẩn openpyxl nguyên tử
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Muse Accounts"
+    
+    header_fill = PatternFill(start_color="10B981", end_color="10B981", fill_type="solid")
+    header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+    center_align = Alignment(horizontal="center", vertical="center")
+    left_align = Alignment(horizontal="left", vertical="center")
+    
+    ws.append(headers)
+    for col_num in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = center_align
         
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Muse Accounts"
+    for r_idx, row_data in enumerate(rows, start=2):
+        ws.append(row_data)
+        ws.cell(row=r_idx, column=1).alignment = center_align
+        ws.cell(row=r_idx, column=2).alignment = left_align
+        ws.cell(row=r_idx, column=3).alignment = center_align
+        ws.cell(row=r_idx, column=4).alignment = left_align
         
-        header_fill = PatternFill(start_color="10B981", end_color="10B981", fill_type="solid")
-        header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
-        center_align = Alignment(horizontal="center", vertical="center")
-        left_align = Alignment(horizontal="left", vertical="center")
-        
-        ws.append(headers)
-        for col_num in range(1, len(headers) + 1):
-            cell = ws.cell(row=1, column=col_num)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = center_align
-            
-        for r_idx, row_data in enumerate(rows, start=2):
-            ws.append(row_data)
-            ws.cell(row=r_idx, column=1).alignment = center_align
-            ws.cell(row=r_idx, column=2).alignment = left_align
-            ws.cell(row=r_idx, column=3).alignment = center_align
-            ws.cell(row=r_idx, column=4).alignment = left_align
-            
-        ws.column_dimensions['A'].width = 8
-        ws.column_dimensions['B'].width = 34
-        ws.column_dimensions['C'].width = 16
-        ws.column_dimensions['D'].width = 85
-        
-        for p in [session_excel_path, latest_excel_path, root_latest_excel]:
-            wb.save(p)
-    except Exception as e:
-        print("Error writing Excel session:", e)
+    ws.column_dimensions['A'].width = 8
+    ws.column_dimensions['B'].width = 34
+    ws.column_dimensions['C'].width = 16
+    ws.column_dimensions['D'].width = 85
+    
+    for p in [session_excel_path, latest_excel_path, root_latest_excel]:
+        atomic_write_excel(p, wb)
 
 def redact_sensitive(text: str) -> str:
     if not isinstance(text, str):
         return text
-    # 1. Redact credentials in URLs: http://user:password@host -> http://user:***@host
-    text = re.sub(r'(https?|socks5?|socks5h)://([^:\s/@]+):([^@\s/]+)@', r'\1://\2:***@', text)
+    # 1. Redact credentials in URLs: http://user:password@host -> http://user:***@host (including URL-encoded)
+    text = re.sub(
+        r'(?i)\b((?:https?|socks5?h?|ftp)://)([^:\s/@]+):([^@\s/]+)@',
+        r'\1\2:***@',
+        text
+    )
+    # Also handle standalone or embedded proxy formats like user:pass@host:port
+    text = re.sub(
+        r'(?i)(^|[^a-zA-Z0-9_-])([a-zA-Z0-9_.-]+):([^@\s/:]+)@([a-zA-Z0-9_.-]+:\d+)',
+        r'\1\2:***@\4',
+        text
+    )
     # 2. Redact OTP / PIN with labels: OTP: 123456, PIN: 123456
     text = re.sub(r'(?i)\b(otp|pin|code|mã\s*(?:xác\s*thực|otp)?)\s*[:=]\s*([a-zA-Z0-9]{4,8})\b', r'\1: ***', text)
-    # 3. Redact secret / token / cookie
+    # 3. Redact secret / token / cookie / password
     text = re.sub(r'(?i)\b(password|passwd|secret|token|cookie)=([^\s&]+)', r'\1=***', text)
     # 4. Redact direct phrases: "MÃ OTP TỪ META: 123456"
     text = re.sub(r'(?i)(mã\s*otp\s*từ\s*meta:\s*)\d+', r'\1***', text)
@@ -690,10 +769,17 @@ async def poll_spinup_otp(email: str, pin: str, timeout_seconds: int = 75, route
     add_log("Đang chờ Meta gửi mã OTP xác thực...", "info", 50)
     start = time.time()
     loop = asyncio.get_event_loop()
-    url = f"{BACKEND_URL}/api/public/otp?email={urllib.parse.quote(email)}&pin={urllib.parse.quote(pin)}"
+    url = f"{BACKEND_URL}/api/public/otp?email={urllib.parse.quote(email)}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "X-Mailbox-Pin": pin.strip(),
+            "User-Agent": "SpinupMail-Bot/1.0"
+        }
+    )
     def _check():
         try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except Exception:
             return None
@@ -1496,7 +1582,7 @@ async def get_accounts():
             "route_spec": safe_route,
             "createdAt": a.get("createdAt"),
             "status": a.get("status"),
-            "error": a.get("error")
+            "error": redact_sensitive(str(a.get("error"))) if a.get("error") else None
         }
         sanitized.append(sanitized_account)
     return {

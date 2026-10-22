@@ -35,7 +35,11 @@ set "BOT_CHECK_CODE=%errorlevel%"
 if "%BOT_CHECK_CODE%"=="1" (
     echo [1/3] Bot Server Daemon [Port 8790] đã được xác thực runtime identity, tiếp tục sử dụng.
 ) else if "%BOT_CHECK_CODE%"=="2" (
-    echo [1/3] CẢNH BÁO: Cổng 8790 đang bị chiếm hoặc tiến trình không phản hồi runtime handshake. Bỏ qua khởi động để bảo vệ tiến trình khác.
+    echo [1/3] CẢNH BÁO LỖI: Cổng 8790 đang bị chiếm bởi tiến trình lạ hoặc sai runtime revision/fingerprint.
+    echo Vui lòng kiểm tra tiến trình đang chiếm cổng 8790 hoặc dừng thủ công trước khi chạy launcher.
+    echo Hủy bỏ khởi động để bảo vệ tiến trình khác và tránh xung đột dữ liệu.
+    pause
+    exit /b 1
 ) else (
     echo [1/3] Đang khởi động Bot Server Daemon [Port 8790]...
     start "Muse Bot Server [Port 8790]" cmd /k "color 0a & python -u scripts/bot_server.py"
@@ -63,7 +67,7 @@ echo.
 echo ===============================================================================
 echo ĐANG KIỂM TRA MỨC ĐỘ SẴN SÀNG CỦA CÁC DỊCH VỤ (READINESS PROBE)...
 
-powershell -Command "$ready = $false; for ($i=0; $i -lt 15; $i++) { try { $r1 = Invoke-WebRequest -Uri 'http://127.0.0.1:8790/api/bot/status' -UseBasicParsing -TimeoutSec 1; $r2 = Invoke-WebRequest -Uri 'http://127.0.0.1:5173/' -UseBasicParsing -TimeoutSec 1; $r3 = Invoke-WebRequest -Uri 'http://127.0.0.1:8787/api/public/domains' -UseBasicParsing -TimeoutSec 1; if ($r1.StatusCode -eq 200 -and $r2.StatusCode -eq 200 -and $r3.StatusCode -eq 200) { $ready = $true; break } } catch {}; Start-Sleep -Seconds 1 }; if ($ready) { Write-Host 'TẤT CẢ DỊCH VỤ ĐÃ PHẢN HỒI SẴN SÀNG!' -ForegroundColor Green } else { Write-Host 'Lưu ý: Một số dịch vụ phản hồi chậm hoặc đang khởi tạo.' -ForegroundColor Yellow }"
+powershell -Command "$ready = $false; for ($i=0; $i -lt 15; $i++) { try { $r1 = Invoke-WebRequest -Uri 'http://127.0.0.1:8790/api/bot/status' -UseBasicParsing -TimeoutSec 1; $r2 = Invoke-WebRequest -Uri 'http://127.0.0.1:5173/' -UseBasicParsing -TimeoutSec 1; $r3 = Invoke-WebRequest -Uri 'http://127.0.0.1:8787/health' -UseBasicParsing -TimeoutSec 1; if ($r1.StatusCode -eq 200 -and $r2.StatusCode -eq 200 -and $r3.StatusCode -eq 200) { $ready = $true; break } } catch {}; Start-Sleep -Seconds 1 }; if ($ready) { Write-Host 'TẤT CẢ DỊCH VỤ ĐÃ PHẢN HỒI SẴN SÀNG!' -ForegroundColor Green } else { Write-Host 'Lưu ý: Một số dịch vụ phản hồi chậm hoặc đang khởi tạo.' -ForegroundColor Yellow }"
 
 echo.
 echo ===============================================================================

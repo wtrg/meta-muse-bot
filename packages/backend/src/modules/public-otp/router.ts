@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { eq, desc } from "drizzle-orm";
 import type { AppHonoEnv } from "@/app/types";
 import { getDb } from "@/platform/db/client";
@@ -185,11 +185,27 @@ export const createPublicOtpRouter = () => {
   });
 
   // 2. Get OTP for a specific email & PIN (auto-syncs live email if registered on live domain)
-  router.get("/otp", async c => {
+  // Supports GET with X-Mailbox-Pin header (or query param) and POST with JSON body { email, pin }.
+  const handleOtp = async (c: Context<AppHonoEnv>) => {
     c.header("Cache-Control", "no-store");
 
-    const rawEmail = c.req.query("email") ?? c.req.query("mail");
-    const pin = c.req.query("pin")?.trim();
+    let rawEmail = c.req.query("email") ?? c.req.query("mail");
+    let pin = (
+      c.req.header("x-mailbox-pin") ||
+      c.req.header("pin") ||
+      c.req.query("pin")
+    )?.trim();
+
+    if (c.req.method === "POST") {
+      try {
+        const body = await c.req.json();
+        if (body && typeof body === "object") {
+          if (!rawEmail && typeof body.email === "string") rawEmail = body.email;
+          if (!rawEmail && typeof body.mail === "string") rawEmail = body.mail;
+          if (!pin && typeof body.pin === "string") pin = body.pin.trim();
+        }
+      } catch {}
+    }
 
     if (!rawEmail || !rawEmail.trim()) {
       return c.json(
@@ -372,7 +388,10 @@ export const createPublicOtpRouter = () => {
       allOtps,
       totalEmails: recentEmails.length,
     });
-  });
+  };
+
+  router.get("/otp", handleOtp);
+  router.post("/otp", handleOtp);
 
   return router;
 };

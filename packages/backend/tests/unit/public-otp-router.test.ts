@@ -338,7 +338,7 @@ describe("public-otp router security, isolation & contract (A01, A02, A04, A05)"
     expect(otpMissingParam.status).toBe(400);
   });
 
-  it("Contract end-to-end: create address with auto PIN delivers secret once, allows OTP query, denies wrong/tenant PIN", async () => {
+  it("OTP query contract: allows OTP query with valid secret, denies wrong/tenant PIN", async () => {
     const testEmail = "auto-pin-box@spinupmail.com";
     const generatedPin = "481516";
     const tenantBPin = "999999";
@@ -397,6 +397,140 @@ describe("public-otp router security, isolation & contract (A01, A02, A04, A05)"
     // 4. Negative test: Missing PIN -> 400 Bad Request
     const missingPinRes = await app.request(`/api/public/otp?email=${testEmail}`);
     expect(missingPinRes.status).toBe(400);
+  });
+
+  it("P1/A02: supports X-Mailbox-Pin header on GET /otp and POST /otp body, avoiding secret in URL query", async () => {
+    const testEmail = "header-auth@spinupmail.com";
+    const pin = "739281";
+
+    mocks.getDb.mockReturnValue({
+      select: vi.fn(() => ({
+        from: () => ({
+          where: () => ({
+            limit: vi.fn().mockImplementation(() => [
+              {
+                id: "addr-header-1",
+                address: testEmail,
+                meta: JSON.stringify({ pin }),
+                createdAt: new Date(),
+              },
+            ]),
+            orderBy: () => ({
+              limit: vi.fn().mockResolvedValue([
+                {
+                  id: "msg-header-1",
+                  from: "noreply@muse.ai",
+                  subject: "Your code is 654321",
+                  bodyText: "Verification code: 654321",
+                  bodyHtml: "<p>Verification code: 654321</p>",
+                  receivedAt: new Date(),
+                },
+              ]),
+            }),
+          }),
+        }),
+      })),
+    });
+
+    // 1. GET with X-Mailbox-Pin header without PIN in URL
+    const getRes = await app.request(`/api/public/otp?email=${encodeURIComponent(testEmail)}`, {
+      method: "GET",
+      headers: { "X-Mailbox-Pin": pin },
+    });
+    expect(getRes.status).toBe(200);
+    expect(getRes.headers.get("Cache-Control")).toBe("no-store");
+    const getData = await getRes.json();
+    expect(getData.ok).toBe(true);
+    expect(getData.latest.otp).toBe("654321");
+
+    // 2. POST with JSON body { email, pin } without credentials in URL
+    const postRes = await app.request("/api/public/otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: testEmail, pin }),
+    });
+    expect(postRes.status).toBe(200);
+    expect(postRes.headers.get("Cache-Control")).toBe("no-store");
+    const postData = await postRes.json();
+    expect(postData.ok).toBe(true);
+    expect(postData.latest.otp).toBe("654321");
+
+    // 3. POST negative test: wrong PIN in body -> 401
+    const wrongPostRes = await app.request("/api/public/otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: testEmail, pin: "000000" }),
+    });
+    expect(wrongPostRes.status).toBe(401);
+  });
+
+  it("Multi-step contract: provisioned secret from storage is accepted via X-Mailbox-Pin header and rejects wrong tenant secret", async () => {
+    // Shared simulated storage for mailbox and messages
+    const mailboxStore = new Map<string, { id: string; address: string; meta: string; createdAt: Date }>();
+    const messageStore = new Map<string, Array<{ id: string; from: string; subject: string; bodyText: string; bodyHtml: string; receivedAt: Date }>>();
+
+    // Populate storage with auto-generated secure PIN
+    const generatedPin = generateSecurePin();
+    const testEmail = "pipeline-user@spinupmail.dev";
+    const mailboxId = "mb-pipe-1";
+
+    mailboxStore.set(testEmail, {
+      id: mailboxId,
+      address: testEmail,
+      meta: JSON.stringify({ pin: generatedPin, label: "Pipeline Mailbox" }),
+      createdAt: new Date(),
+    });
+
+    messageStore.set(mailboxId, [
+      {
+        id: "msg-pipe-1",
+        from: "noreply@muse.ai",
+        subject: "Mã OTP Muse AI của bạn",
+        bodyText: `Mã OTP: 987654 cho tài khoản ${testEmail}`,
+        bodyHtml: `<p>Mã OTP: 987654</p>`,
+        receivedAt: new Date(),
+      },
+    ]);
+
+    // Wire mockDb to read from shared simulated storage
+    mocks.getDb.mockReturnValue({
+      select: vi.fn(() => ({
+        from: () => ({
+          where: () => ({
+            limit: vi.fn().mockImplementation(() => {
+              const mb = mailboxStore.get(testEmail);
+              return mb ? [mb] : [];
+            }),
+            orderBy: () => ({
+              limit: vi.fn().mockImplementation(() => messageStore.get(mailboxId) ?? []),
+            }),
+          }),
+        }),
+      })),
+    });
+
+    // 1. Valid authentication using provisioned PIN via X-Mailbox-Pin header
+    const validRes = await app.request(`/api/public/otp?email=${encodeURIComponent(testEmail)}`, {
+      method: "GET",
+      headers: { "X-Mailbox-Pin": generatedPin },
+    });
+    expect(validRes.status).toBe(200);
+    const validData = await validRes.json();
+    expect(validData.ok).toBe(true);
+    expect(validData.latest.otp).toBe("987654");
+
+    // 2. Reject wrong secret with 401
+    const wrongRes = await app.request(`/api/public/otp?email=${encodeURIComponent(testEmail)}`, {
+      method: "GET",
+      headers: { "X-Mailbox-Pin": "wrong-secret-999" },
+    });
+    expect(wrongRes.status).toBe(401);
+
+    // 3. Reject missing secret with 400
+    const missingRes = await app.request(`/api/public/otp?email=${encodeURIComponent(testEmail)}`, {
+      method: "GET",
+    });
+    expect(missingRes.status).toBe(400);
   });
 });
 

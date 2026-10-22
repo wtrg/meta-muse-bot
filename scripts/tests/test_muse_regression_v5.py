@@ -596,6 +596,122 @@ class MuseG5ExplicitTableTests(unittest.TestCase):
         self.assertTrue(hasattr(muse_access, "classify_access"))
         self.assertTrue(hasattr(muse_invites, "redeem_invite"))
 
+    def test_t25_save_accounts_txt_strips_proxy_credentials_and_redacts_errors(self):
+        # T25: save_accounts_txt strips user/pass from proxy_used and redacts sensitive errors, while preserving mailbox PIN
+        mock_accounts = [
+            {
+                "id": "acc-1",
+                "email": "user1@domain.com",
+                "pin": "716253",
+                "password": "Password123!",
+                "status": "SUCCESS_CHAT_READY",
+                "proxy_used": "http://myuser:supersecretpass@10.0.0.1:8080",
+                "createdAt": "2026-10-22T08:00:00Z",
+            },
+            {
+                "id": "acc-2",
+                "email": "user2@domain.com",
+                "pin": "998877",
+                "password": "Password123!",
+                "status": "FAILED_VERIFY",
+                "proxy_used": "socks5://socksuser:sockspassword@10.0.0.2:1080",
+                "error": "Failed to connect via http://myuser:supersecretpass@10.0.0.1:8080: timed out",
+                "createdAt": "2026-10-22T08:05:00Z",
+            },
+        ]
+        written_files = {}
+
+        def mock_atomic_write(target_path, content, encoding="utf-8"):
+            written_files[target_path] = content
+
+        with patch.object(bot.state, "accounts", mock_accounts), \
+             patch.object(bot, "atomic_write_text", side_effect=mock_atomic_write):
+            bot.save_accounts_txt()
+
+        self.assertTrue(len(written_files) > 0)
+        for path, content in written_files.items():
+            # Sensitive proxy credentials must be redacted or stripped
+            self.assertNotIn("supersecretpass", content)
+            self.assertNotIn("sockspassword", content)
+            # Mailbox PINs for valid accounts must be preserved according to contract
+            self.assertIn("716253", content)
+
+    def test_t26_get_accounts_redacts_proxy_passwords_in_error_dto(self):
+        # T26: /api/bot/accounts redacts raw proxy credentials and passwords in error strings
+        mock_accs = [
+            {
+                "id": "acc-err-1",
+                "email": "err@domain.com",
+                "status": "FAILED_NETWORK",
+                "proxy_used": "http://admin:adminsecret123@1.2.3.4:8080",
+                "error": "Proxy connect error: http://admin:adminsecret123@1.2.3.4:8080 refused connection password=rawpwd456",
+                "createdAt": "2026-10-22T09:00:00Z",
+            }
+        ]
+        with patch.object(bot.state, "accounts", mock_accs), patch.object(bot.os.path, "exists", return_value=False):
+            res = self.client.get("/api/bot/accounts")
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            account = data["accounts"][0]
+            # Verify proxy_used sanitized
+            self.assertNotIn("adminsecret123", account["proxy_used"])
+            # Verify error message redacted
+            self.assertNotIn("adminsecret123", account["error"])
+            self.assertNotIn("rawpwd456", account["error"])
+            self.assertIn("***", account["error"])
+
+    def test_t27_atomic_write_failure_propagates_exception_and_cleans_tmp(self):
+        # T27: atomic writes propagate errors and clean up temp files upon failure
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target_file = os.path.join(tmp_dir, "test_output.txt")
+            with patch("os.replace", side_effect=OSError("Simulated disk write error")):
+                with self.assertRaises(OSError):
+                    bot.atomic_write_text(target_file, "Some test content")
+            # Ensure no orphaned temp files remained
+            remaining_files = os.listdir(tmp_dir)
+            self.assertEqual(remaining_files, [])
+
+    def test_t28_validate_tunnel_url_enforces_public_domain_and_scheme(self):
+        # T28: validate_tunnel_url rejects invalid schemes and loopbacks, accepts valid public tunnels
+        self.assertIsNone(bot.validate_tunnel_url("http://127.0.0.1:5173"))
+        self.assertIsNone(bot.validate_tunnel_url("http://localhost:3000"))
+        self.assertIsNone(bot.validate_tunnel_url("http://0.0.0.0:8080"))
+        self.assertIsNone(bot.validate_tunnel_url("ftp://tunnel.example.com"))
+        self.assertIsNone(bot.validate_tunnel_url("https://invalid host.com"))
+        self.assertIsNone(bot.validate_tunnel_url(""))
+        self.assertIsNone(bot.validate_tunnel_url(None))
+
+        self.assertEqual(bot.validate_tunnel_url("https://muse-tunnel.loca.lt"), "https://muse-tunnel.loca.lt")
+        self.assertEqual(bot.validate_tunnel_url("http://abc-123.ngrok-free.app/"), "http://abc-123.ngrok-free.app")
+
+    def test_t29_poll_spinup_otp_transports_pin_via_header(self):
+        # T29: poll_spinup_otp passes PIN in X-Mailbox-Pin header instead of query param
+        bot.state.stop_requested = False
+        captured_requests = []
+
+        class DummyResponse:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                pass
+            def read(self):
+                return json.dumps({"ok": True, "hasEmails": True, "latest": {"otp": "123456"}}).encode("utf-8")
+
+        def mock_urlopen(req, timeout=10):
+            captured_requests.append(req)
+            return DummyResponse()
+
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+            res = asyncio.run(bot.poll_spinup_otp("test@example.com", "987654", timeout_seconds=1))
+            self.assertEqual(res, "123456")
+            self.assertEqual(len(captured_requests), 1)
+            req = captured_requests[0]
+            # Ensure PIN is NOT present in URL query
+            self.assertNotIn("pin=", req.full_url)
+            # Ensure PIN is passed in X-Mailbox-Pin header
+            self.assertEqual(req.headers.get("X-mailbox-pin"), "987654")
+
 
 if __name__ == "__main__":
     unittest.main()

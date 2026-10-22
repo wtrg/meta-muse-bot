@@ -58,6 +58,15 @@ export const PublicOtpPage = () => {
     if (urlEmail && urlPin) {
       setAutoRefresh(true);
     }
+    if (urlPin && typeof window !== "undefined" && window.location) {
+      try {
+        const cleanParams = new URLSearchParams(window.location.search);
+        cleanParams.delete("pin");
+        const newSearch = cleanParams.toString();
+        const newUrl = window.location.pathname + (newSearch ? `?${newSearch}` : "");
+        window.history.replaceState({}, document.title, newUrl);
+      } catch {}
+    }
   }, [urlEmail, urlPin]);
 
   const fetchOtp = React.useCallback(
@@ -80,7 +89,12 @@ export const PublicOtpPage = () => {
 
       try {
         const response = await fetch(
-          `/api/public/otp?email=${encodeURIComponent(targetMail)}&pin=${encodeURIComponent(targetPin)}`
+          `/api/public/otp?email=${encodeURIComponent(targetMail)}`,
+          {
+            headers: {
+              "X-Mailbox-Pin": targetPin,
+            },
+          }
         );
         const result = (await response.json()) as OtpResult;
 
@@ -349,11 +363,12 @@ export const PublicOtpPage = () => {
         <div className="p-3.5 rounded-lg border border-border/70 bg-card/60 text-xs text-muted-foreground space-y-2">
           <p className="font-semibold text-foreground">💡 Dành cho người bán / chia sẻ tài khoản:</p>
           <p>
-            Bạn có thể gửi cho khách link tự động dạng:
+            Bạn có thể gửi cho khách link hòm thư an toàn dạng:
             <br />
             <code className="text-primary font-mono text-[11px] block mt-1 p-1 bg-muted rounded truncate">
-              {window.location.origin}/otp?mail={email || "acc01@domain.com"}&pin={pin || "827192"}
+              {window.location.origin}/otp?mail={email || "acc01@domain.com"}
             </code>
+            (Người nhận chỉ cần nhập thêm mã PIN bí mật được cấp riêng).
           </p>
           <div className="flex gap-2 pt-1">
             <Button
