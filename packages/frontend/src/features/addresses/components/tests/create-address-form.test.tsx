@@ -143,6 +143,69 @@ describe("CreateAddressForm", () => {
     expect(screen.queryByLabelText("Mailbox PIN")).toBeNull();
   });
 
+  it("preserves provisioned PIN of previous mailbox and blocks new submission until saved/dismissed", async () => {
+    createMutation.mutateAsync
+      .mockResolvedValueOnce({
+        address: "mailbox-a@example.com",
+        pin: "111222",
+      })
+      .mockRejectedValueOnce(new Error("Failed to create mailbox B"));
+
+    await renderWithAct(<CreateAddressForm domains={["example.com"]} />);
+
+    // Step 1: Create mailbox A with PIN
+    await submitMailbox(true);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Mailbox PIN").textContent).toBe("111222")
+    );
+    expect(createMutation.mutateAsync).toHaveBeenCalledTimes(1);
+
+    // Step 2: Attempt to create mailbox B without dismissing PIN A
+    fireEvent.change(screen.getByLabelText("Username"), {
+      target: { value: "mailbox-b" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create address" }));
+    });
+
+    // Step 3: Verify B was blocked and did NOT call mutateAsync, PIN A is still visible, and guidance was provided
+    expect(createMutation.mutateAsync).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Mailbox PIN").textContent).toBe("111222");
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("save or dismiss")
+    );
+
+    // Step 4: Clipboard failure on copy does not dismiss PIN
+    const failingClipboard = {
+      writeText: vi.fn().mockRejectedValue(new Error("Clipboard denied")),
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: failingClipboard,
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy mailbox PIN" }));
+    });
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("Could not copy PIN")
+    );
+    expect(screen.getByLabelText("Mailbox PIN").textContent).toBe("111222");
+
+    // Step 5: User explicitly dismisses PIN A
+    fireEvent.click(
+      screen.getByRole("button", { name: "I've saved this PIN" })
+    );
+    expect(screen.queryByLabelText("Mailbox PIN")).toBeNull();
+
+    // Step 6: Now mailbox B can be submitted
+    fireEvent.click(screen.getByText("Delete all"));
+    fireEvent.click(screen.getByRole("checkbox"));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create address" }));
+    });
+    expect(createMutation.mutateAsync).toHaveBeenCalledTimes(2);
+  });
+
   it("reports missing provisioned PIN instead of inventing a secret", async () => {
     createMutation.mutateAsync.mockResolvedValue({
       address: "owned-mailbox@example.com",

@@ -1,5 +1,6 @@
+import { useEffect } from "react";
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useNavigate } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PublicOtpPage } from "@/pages/public-otp-page";
 import { renderWithAct } from "@/test/render-with-act";
@@ -33,6 +34,31 @@ const advance = async (milliseconds: number) => {
 const mount = async () => {
   const view = await renderWithAct(
     <MemoryRouter initialEntries={["/otp?email=a@example.com&pin=111111"]}>
+      <PublicOtpPage />
+    </MemoryRouter>
+  );
+  await advance(0);
+  return view;
+};
+
+const navigateRef: { current: ((to: string) => void) | null } = {
+  current: null,
+};
+
+const NavigationSpy = () => {
+  const navigate = useNavigate();
+  useEffect(() => {
+    navigateRef.current = navigate;
+  }, [navigate]);
+  return null;
+};
+
+const mountWithNavigation = async (
+  initialEntries = ["/otp?email=a@example.com&pin=111111"]
+) => {
+  const view = await renderWithAct(
+    <MemoryRouter initialEntries={initialEntries}>
+      <NavigationSpy />
       <PublicOtpPage />
     </MemoryRouter>
   );
@@ -283,5 +309,126 @@ describe("PublicOtpPage request lifecycle", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(screen.getByText("654321")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("resets loading and error when credentials change during in-flight request, and ignores late response", async () => {
+    const firstRequest = new Response("{}", {
+      status: 429,
+      headers: { "Retry-After": "45" },
+    });
+    const pendingDeferred = deferred();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(firstRequest)
+      .mockReturnValueOnce(pendingDeferred.promise);
+
+    await mount();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Đã đạt giới hạn truy cập"
+    );
+
+    // Advance 45s to clear initial cooldown and trigger second request, which is pending
+    await advance(45000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // Verify in-flight loading state
+    const button = screen.getByRole("button", {
+      name: /Đang kiểm tra/,
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+
+    // User changes email while request is in-flight
+    fireEvent.change(screen.getByLabelText("Địa chỉ Email"), {
+      target: { value: "changed@example.com" },
+    });
+
+    // Verification 1: Loading is immediately reset, button is no longer disabled
+    const readyButton = screen.getByRole("button", {
+      name: "Lấy mã OTP",
+    }) as HTMLButtonElement;
+    expect(readyButton.disabled).toBe(false);
+    expect(screen.queryByText(/Đang kiểm tra/)).toBeNull();
+
+    // Verification 2: Error alert is cleared
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    // Verification 3: Resolving the pending deferred response late does not update UI
+    await act(async () => {
+      pendingDeferred.resolve(response("999999"));
+    });
+    expect(screen.queryByText("999999")).toBeNull();
+  });
+
+  it("resets loading, error, and stale state on URL navigation during in-flight request, and ignores late response", async () => {
+    const pendingDeferred = deferred();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockReturnValueOnce(pendingDeferred.promise);
+
+    await mountWithNavigation(["/otp?email=first@example.com&pin=111111"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Request is in-flight
+    const button = screen.getByRole("button", {
+      name: /Đang kiểm tra/,
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+
+    // Navigate to a new URL while request is still pending
+    await act(async () => {
+      navigateRef.current?.("/otp?email=navigated@example.com&pin=222222");
+    });
+
+    // Loading must be reset immediately during navigation render
+    const readyButton = screen.getByRole("button", {
+      name: "Lấy mã OTP",
+    }) as HTMLButtonElement;
+    expect(readyButton.disabled).toBe(false);
+    expect(screen.queryByText(/Đang kiểm tra/)).toBeNull();
+
+    // Input values reflect new URL
+    expect(
+      (screen.getByLabelText("Địa chỉ Email") as HTMLInputElement).value
+    ).toBe("navigated@example.com");
+    expect(
+      (screen.getByLabelText("Mã PIN bảo mật") as HTMLInputElement).value
+    ).toBe("222222");
+
+    // Late response resolution is ignored
+    await act(async () => {
+      pendingDeferred.resolve(response("888888"));
+    });
+    expect(screen.queryByText("888888")).toBeNull();
+  });
+
+  it("preserves active 429 cooldown across email/pin changes", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("{}", {
+        status: 429,
+        headers: { "Retry-After": "40" },
+      })
+    );
+
+    await mount();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Đã đạt giới hạn truy cập"
+    );
+
+    // User changes email while 40s cooldown is active
+    fireEvent.change(screen.getByLabelText("Địa chỉ Email"), {
+      target: { value: "other@example.com" },
+    });
+    // Error alert is cleared on input change
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    // User tries to click "Lấy mã OTP" before 40s expires (at 20s)
+    await advance(20000);
+    fireEvent.click(screen.getByRole("button", { name: "Lấy mã OTP" }));
+
+    // Cooldown is still enforced! Shows cooldown message and does not fire a request
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Vui lòng chờ đến lần cập nhật tiếp theo"
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

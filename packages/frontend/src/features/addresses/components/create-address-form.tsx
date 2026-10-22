@@ -391,7 +391,12 @@ export const CreateAddressForm = ({
       ),
     },
     onSubmit: async ({ value }) => {
-      setProvisionedPin(null);
+      if (provisionedPin) {
+        toast.error(
+          "Please save or dismiss your mailbox PIN before creating another address."
+        );
+        return;
+      }
       const normalizedDomain = getNormalizedSelectedDomain(value.domain);
       const selectedDomain =
         normalizedDomain ||
@@ -480,6 +485,12 @@ export const CreateAddressForm = ({
       onSubmit={event => {
         event.preventDefault();
         event.stopPropagation();
+        if (provisionedPin) {
+          toast.error(
+            "Please save or dismiss your mailbox PIN before creating another address."
+          );
+          return;
+        }
         void form.handleSubmit();
       }}
     >
