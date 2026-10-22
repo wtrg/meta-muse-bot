@@ -2,7 +2,13 @@ import * as React from "react";
 import { useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
@@ -46,92 +52,195 @@ export const PublicOtpPage = () => {
   const [email, setEmail] = React.useState(urlEmail);
   const [pin, setPin] = React.useState(urlPin);
   const [loading, setLoading] = React.useState(false);
-  const [autoRefresh, setAutoRefresh] = React.useState(Boolean(urlEmail && urlPin));
-  const [data, setData] = React.useState<OtpResult | null>(null);
+  const [autoRefresh, setAutoRefresh] = React.useState(
+    Boolean(urlEmail && urlPin)
+  );
+  const [result, setResult] = React.useState<{
+    key: string;
+    data: OtpResult;
+  } | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [scheduleVersion, reschedule] = React.useReducer(value => value + 1, 0);
+  const request = React.useRef<AbortController | null>(null);
+  const sequence = React.useRef(0);
+  const nextRequestAt = React.useRef(0);
+  const failureCount = React.useRef(0);
+  const mounted = React.useRef(true);
+  const credentialsKey = `${email.trim().toLowerCase()}\0${pin.trim()}`;
+  const currentKey = React.useRef(credentialsKey);
+  const data = result?.key === credentialsKey ? result.data : null;
   const [copied, setCopied] = React.useState(false);
   const [copiedAccount, setCopiedAccount] = React.useState(false);
   const [showBody, setShowBody] = React.useState(false);
+  const urlKey = `${urlEmail}\0${urlPin}`;
+  const [previousUrl, setPreviousUrl] = React.useState(urlKey);
+
+  // Reset URL-derived state during the render that observes navigation, so an
+  // old mailbox is never committed alongside the new URL.
+  if (previousUrl !== urlKey) {
+    setPreviousUrl(urlKey);
+    setEmail(urlEmail);
+    setPin(urlPin);
+    setAutoRefresh(Boolean(urlEmail && urlPin));
+    setResult(null);
+    setError(null);
+    setLoading(false);
+    setCopied(false);
+    setShowBody(false);
+  }
 
   React.useEffect(() => {
-    if (urlEmail) setEmail(urlEmail);
-    if (urlPin) setPin(urlPin);
-    if (urlEmail && urlPin) {
-      setAutoRefresh(true);
-    }
     if (urlPin && typeof window !== "undefined" && window.location) {
       try {
         const cleanParams = new URLSearchParams(window.location.search);
         cleanParams.delete("pin");
         const newSearch = cleanParams.toString();
-        const newUrl = window.location.pathname + (newSearch ? `?${newSearch}` : "");
+        const newUrl =
+          window.location.pathname + (newSearch ? `?${newSearch}` : "");
         window.history.replaceState({}, document.title, newUrl);
-      } catch {}
+      } catch {
+        // Some embedded browsers disallow history updates; requests still use a header.
+      }
     }
   }, [urlEmail, urlPin]);
 
-  const fetchOtp = React.useCallback(
-    async (showLoadingSpinner = true, overrideEmail?: string, overridePin?: string) => {
-      const targetMail = (overrideEmail !== undefined ? overrideEmail : email).trim().toLowerCase();
-      const targetPin = (overridePin !== undefined ? overridePin : pin).trim();
+  React.useLayoutEffect(() => {
+    currentKey.current = credentialsKey;
+    sequence.current++;
+    request.current?.abort();
+    request.current = null;
+  }, [credentialsKey]);
 
-      if (!targetMail) {
-        toast.error("Vui lòng nhập địa chỉ email");
-        return;
-      }
-      if (!targetPin) {
-        toast.error("Vui lòng nhập mã PIN bảo mật");
-        return;
-      }
+  const clearMailbox = () => {
+    sequence.current++;
+    request.current?.abort();
+    request.current = null;
+    setResult(null);
+    setError(null);
+    setLoading(false);
+    setCopied(false);
+    setShowBody(false);
+  };
 
-      if (showLoadingSpinner) {
-        setLoading(true);
-      }
-
-      try {
-        const response = await fetch(
-          `/api/public/otp?email=${encodeURIComponent(targetMail)}`,
-          {
-            headers: {
-              "X-Mailbox-Pin": targetPin,
-            },
-          }
-        );
-        const result = (await response.json()) as OtpResult;
-
-        if (!response.ok || !result.ok) {
-          setData(null);
-          toast.error(result.error || "Không thể lấy thông tin OTP");
-        } else {
-          setData(result);
-        }
-      } catch {
-        toast.error("Lỗi kết nối máy chủ");
-      } finally {
-        if (showLoadingSpinner) {
-          setLoading(false);
-        }
-      }
-    },
-    [email, pin]
-  );
-
-  // Auto-fetch on mount or whenever URL params change
   React.useEffect(() => {
-    if (urlEmail && urlPin) {
-      void fetchOtp(true, urlEmail, urlPin);
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      request.current?.abort();
+    };
+  }, []);
+
+  const fetchOtp = React.useCallback(async () => {
+    const targetMail = email.trim().toLowerCase();
+    const targetPin = pin.trim();
+
+    if (!targetMail) {
+      toast.error("Vui lòng nhập địa chỉ email");
+      return;
     }
-  }, [urlEmail, urlPin, fetchOtp]);
+    if (!targetPin) {
+      toast.error("Vui lòng nhập mã PIN bảo mật");
+      return;
+    }
 
-  // Auto-refresh polling every 3 seconds if enabled
+    // Share the cooldown between automatic and manual refreshes, including
+    // credential changes. Eight seconds leaves room within the 10/min budget.
+    if (request.current) return;
+    if (Date.now() < nextRequestAt.current) {
+      setError("Vui lòng chờ đến lần cập nhật tiếp theo.");
+      return;
+    }
+
+    const controller = new AbortController();
+    request.current = controller;
+    const requestId = ++sequence.current;
+    const key = credentialsKey;
+    const isCurrent = () =>
+      mounted.current &&
+      requestId === sequence.current &&
+      key === currentKey.current;
+    nextRequestAt.current = Date.now() + 8000;
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `/api/public/otp?email=${encodeURIComponent(targetMail)}`,
+        {
+          signal: controller.signal,
+          cache: "no-store",
+          headers: {
+            "X-Mailbox-Pin": targetPin,
+          },
+        }
+      );
+      if (!isCurrent()) return;
+      if (response.status === 429) {
+        const retryAfter = response.headers.get("Retry-After");
+        const seconds = retryAfter?.trim() ? Number(retryAfter) : NaN;
+        const retryAt = Number.isFinite(seconds)
+          ? Date.now() + Math.max(0, seconds) * 1000
+          : Date.parse(retryAfter ?? "");
+        nextRequestAt.current = Math.max(
+          Date.now() + 8000,
+          Number.isFinite(retryAt) ? retryAt : Date.now() + 60000
+        );
+        setResult(null);
+        setError("Đã đạt giới hạn truy cập. Tự động chờ trước khi thử lại.");
+        return;
+      }
+
+      let result: OtpResult | null = null;
+      try {
+        result = (await response.json()) as OtpResult;
+      } catch {
+        // If response is not valid JSON (e.g. proxy HTML 502/503), result stays null
+      }
+      if (!isCurrent()) return;
+
+      if (!response.ok || !result || !result.ok) {
+        failureCount.current++;
+        nextRequestAt.current =
+          Date.now() +
+          Math.min(60000, 8000 * 2 ** Math.min(failureCount.current, 3));
+        setResult(null);
+        setError(
+          result?.error ||
+            (response.status >= 500
+              ? "Không thể kết nối dịch vụ thư trực tiếp. Vui lòng thử lại sau."
+              : "Không thể lấy thông tin OTP")
+        );
+      } else {
+        failureCount.current = 0;
+        setResult({ key, data: result });
+      }
+    } catch {
+      if (!isCurrent()) return;
+      failureCount.current++;
+      nextRequestAt.current =
+        Date.now() +
+        Math.min(60000, 8000 * 2 ** Math.min(failureCount.current, 3));
+      setResult(null);
+      setError("Lỗi kết nối máy chủ. Chưa thể cập nhật hộp thư.");
+    } finally {
+      if (isCurrent()) {
+        request.current = null;
+        setLoading(false);
+        reschedule();
+      }
+    }
+  }, [email, pin, credentialsKey]);
+
+  // Schedule only after the previous request settles; manual refresh uses the
+  // same gate and a 429 cooldown survives mailbox/PIN changes.
   React.useEffect(() => {
-    if (!autoRefresh || !email.trim() || !pin.trim()) return;
-
-    const interval = setInterval(() => {
-      void fetchOtp(false);
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [autoRefresh, email, pin, fetchOtp]);
+    if (!autoRefresh || !email.trim() || !pin.trim() || request.current) return;
+    const timer = setTimeout(
+      () => void fetchOtp(),
+      Math.max(0, nextRequestAt.current - Date.now())
+    );
+    return () => clearTimeout(timer);
+  }, [autoRefresh, email, pin, fetchOtp, scheduleVersion]);
 
   const handleCopyOtp = async (code: string) => {
     try {
@@ -168,16 +277,20 @@ export const PublicOtpPage = () => {
             Lấy Mã OTP Muse.ai
           </h1>
           <p className="text-sm text-muted-foreground">
-            Nhập email và mã PIN để lấy mã xác thực hoặc link đăng nhập mới nhất.
+            Nhập email và mã PIN để lấy mã xác thực hoặc link đăng nhập mới
+            nhất.
           </p>
         </div>
 
         {/* Input Card */}
         <Card className="border border-border/80 shadow-md">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base font-medium">Thông tin hòm thư</CardTitle>
+            <CardTitle className="text-base font-medium">
+              Thông tin hòm thư
+            </CardTitle>
             <CardDescription className="text-xs">
-              Mã PIN giúp bảo vệ hòm thư, chỉ người có mã mới xem được OTP của tài khoản này.
+              Mã PIN giúp bảo vệ hòm thư, chỉ người có mã mới xem được OTP của
+              tài khoản này.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -186,10 +299,14 @@ export const PublicOtpPage = () => {
                 Địa chỉ Email
               </label>
               <Input
+                aria-label="Địa chỉ Email"
                 type="email"
                 placeholder="ví dụ: muse_user01@domain.com"
                 value={email}
-                onChange={e => setEmail(e.target.value)}
+                onChange={e => {
+                  clearMailbox();
+                  setEmail(e.target.value);
+                }}
                 className="font-mono text-sm"
               />
             </div>
@@ -199,10 +316,14 @@ export const PublicOtpPage = () => {
                 Mã PIN bảo mật
               </label>
               <Input
-                type="text"
+                aria-label="Mã PIN bảo mật"
+                type="password"
                 placeholder="ví dụ: 827192"
                 value={pin}
-                onChange={e => setPin(e.target.value)}
+                onChange={e => {
+                  clearMailbox();
+                  setPin(e.target.value);
+                }}
                 className="font-mono text-sm tracking-wider"
               />
             </div>
@@ -215,7 +336,7 @@ export const PublicOtpPage = () => {
                   onChange={e => setAutoRefresh(e.target.checked)}
                   className="rounded border-border text-primary size-4"
                 />
-                <span>Tự động cập nhật mỗi 3 giây</span>
+                <span>Tự động cập nhật mỗi 8 giây khi máy chủ cho phép</span>
                 {autoRefresh && (
                   <span className="flex h-2 w-2 relative">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -227,7 +348,7 @@ export const PublicOtpPage = () => {
               <div className="flex items-center gap-2">
                 <Button
                   type="button"
-                  onClick={() => void fetchOtp(true)}
+                  onClick={() => void fetchOtp()}
                   disabled={loading}
                   className="font-medium text-xs sm:text-sm px-4"
                 >
@@ -245,6 +366,11 @@ export const PublicOtpPage = () => {
           </CardContent>
         </Card>
 
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
         {/* Results display */}
         {data && (
           <div className="space-y-4 animate-in fade-in duration-300">
@@ -265,10 +391,22 @@ export const PublicOtpPage = () => {
                         ⚠️ Nguyên nhân chưa nhận được mã:
                       </div>
                       <div>
-                        Email này mang đuôi <code>@spinupmail.dev</code> (tên miền thử nghiệm nội bộ local). Máy chủ Muse.ai trên internet không thể gửi thư tới máy tính của bạn qua tên miền này.
+                        Email này mang đuôi <code>@spinupmail.dev</code> (tên
+                        miền thử nghiệm nội bộ local). Máy chủ Muse.ai trên
+                        internet không thể gửi thư tới máy tính của bạn qua tên
+                        miền này.
                       </div>
                       <div className="pt-1 font-medium">
-                        👉 <strong>Giải pháp:</strong> Hãy sang <a href="/bulk" className="underline font-bold text-primary">Trang Tạo Mail Hàng Loạt (/bulk)</a> và chọn đuôi <strong>@maxxspace.com</strong> (Email THẬT nhận được từ internet 100%) để đăng ký tài khoản Muse.ai!
+                        👉 <strong>Giải pháp:</strong> Hãy sang{" "}
+                        <a
+                          href="/bulk"
+                          className="underline font-bold text-primary"
+                        >
+                          Trang Tạo Mail Hàng Loạt (/bulk)
+                        </a>{" "}
+                        và chọn đuôi <strong>@maxxspace.com</strong> (Email THẬT
+                        nhận được từ internet 100%) để đăng ký tài khoản
+                        Muse.ai!
                       </div>
                     </div>
                   )}
@@ -278,12 +416,17 @@ export const PublicOtpPage = () => {
               <Card className="border-2 border-primary/40 bg-card shadow-lg">
                 <CardHeader className="pb-3 border-b border-border/40">
                   <div className="flex items-center justify-between">
-                    <Badge variant="outline" className="text-xs font-mono text-emerald-600 dark:text-emerald-400 border-emerald-500/40 bg-emerald-500/10">
+                    <Badge
+                      variant="outline"
+                      className="text-xs font-mono text-emerald-600 dark:text-emerald-400 border-emerald-500/40 bg-emerald-500/10"
+                    >
                       ✓ Đã nhận thư mới
                     </Badge>
                     <span className="text-[11px] text-muted-foreground">
                       {data.latest?.receivedAt
-                        ? new Date(data.latest.receivedAt).toLocaleTimeString("vi-VN")
+                        ? new Date(data.latest.receivedAt).toLocaleTimeString(
+                            "vi-VN"
+                          )
                         : ""}
                     </span>
                   </div>
@@ -316,7 +459,8 @@ export const PublicOtpPage = () => {
                     </div>
                   ) : (
                     <div className="p-3 rounded-lg bg-muted text-center text-xs text-muted-foreground">
-                      Không tìm thấy mã số ngắn trong email. Vui lòng xem link hoặc nội dung bên dưới.
+                      Không tìm thấy mã số ngắn trong email. Vui lòng xem link
+                      hoặc nội dung bên dưới.
                     </div>
                   )}
 
@@ -344,12 +488,25 @@ export const PublicOtpPage = () => {
                       onClick={() => setShowBody(prev => !prev)}
                       className="text-xs text-muted-foreground hover:text-foreground font-medium underline flex items-center gap-1"
                     >
-                      {showBody ? "Thu gọn nội dung email ▲" : "Xem toàn bộ nội dung email nhận được ▼"}
+                      {showBody
+                        ? "Thu gọn nội dung email ▲"
+                        : "Xem toàn bộ nội dung email nhận được ▼"}
                     </button>
 
                     {showBody && (
                       <div className="mt-3 p-3 rounded-md bg-muted/50 border border-border/60 text-xs text-foreground font-mono whitespace-pre-wrap max-h-72 overflow-y-auto">
-                        {data.latest?.bodyText || (data.latest?.bodyHtml ? data.latest.bodyHtml.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ").replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").trim() : "(Không có nội dung)")}
+                        {data.latest?.bodyText ||
+                          (data.latest?.bodyHtml
+                            ? data.latest.bodyHtml
+                                .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
+                                .replace(
+                                  /<script[^>]*>[\s\S]*?<\/script>/gi,
+                                  " "
+                                )
+                                .replace(/<[^>]+>/g, " ")
+                                .replace(/&nbsp;/g, " ")
+                                .trim()
+                            : "(Không có nội dung)")}
                       </div>
                     )}
                   </div>
@@ -361,7 +518,9 @@ export const PublicOtpPage = () => {
 
         {/* Quick link sharing tip */}
         <div className="p-3.5 rounded-lg border border-border/70 bg-card/60 text-xs text-muted-foreground space-y-2">
-          <p className="font-semibold text-foreground">💡 Dành cho người bán / chia sẻ tài khoản:</p>
+          <p className="font-semibold text-foreground">
+            💡 Dành cho người bán / chia sẻ tài khoản:
+          </p>
           <p>
             Bạn có thể gửi cho khách link hòm thư an toàn dạng:
             <br />

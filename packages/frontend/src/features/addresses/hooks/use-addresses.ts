@@ -118,6 +118,8 @@ export const useCreateAddressMutation = () => {
   const { activeOrganizationId } = useAuth();
 
   return useMutation({
+    // Creation may contain a one-time PIN; discard inactive mutation data.
+    gcTime: 0,
     mutationFn: (payload: CreateAddressPayload) =>
       createEmailAddress(payload, {
         organizationId: activeOrganizationId,

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createOrganization,
+  createEmailAddress,
   downloadEmailAttachment,
   listAdminAnomalies,
   listAllEmailAddresses,
@@ -23,6 +24,33 @@ afterEach(() => {
 });
 
 describe("api client helpers", () => {
+  it("creates one authenticated org-scoped mailbox with opt-in PIN and keeps the PIN out of its URL", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "owned-1",
+          address: "owned@example.com",
+          pin: "739281",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    const created = await createEmailAddress(
+      { localPart: "owned", acceptedRiskNotice: true, generatePin: true },
+      { organizationId: "org-1" }
+    );
+    expect(created.pin).toBe("739281");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/api/email-addresses?_org=org-1");
+    expect(String(url)).not.toContain("pin");
+    expect(init?.credentials).toBe("include");
+    expect((init?.headers as Record<string, string>)["X-Org-Id"]).toBe("org-1");
+    expect(JSON.parse(init?.body as string)).toEqual({
+      localPart: "owned",
+      acceptedRiskNotice: true,
+      generatePin: true,
+    });
+  });
   it("adds org cache key and scope header to requests", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(

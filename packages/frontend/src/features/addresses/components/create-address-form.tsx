@@ -303,6 +303,11 @@ export const CreateAddressForm = ({
   const resolvedMaxReceivedEmailsPerAddress =
     maxReceivedEmailsPerAddress ?? DEFAULT_MAX_RECEIVED_EMAILS_PER_ADDRESS;
   const createMutation = useCreateAddressMutation();
+  const [generatePin, setGeneratePin] = useState(false);
+  const [provisionedPin, setProvisionedPin] = useState<{
+    address: string;
+    pin: string;
+  } | null>(null);
   const sendIconRef = useRef<SendIconHandle>(null);
   const [selectedIntegrationProvider, setSelectedIntegrationProvider] =
     useState<IntegrationProvider | "">("");
@@ -386,6 +391,7 @@ export const CreateAddressForm = ({
       ),
     },
     onSubmit: async ({ value }) => {
+      setProvisionedPin(null);
       const normalizedDomain = getNormalizedSelectedDomain(value.domain);
       const selectedDomain =
         normalizedDomain ||
@@ -415,16 +421,17 @@ export const CreateAddressForm = ({
               ? undefined
               : value.maxReceivedEmailAction,
           acceptedRiskNotice: value.acceptedRiskNotice,
+          generatePin,
         }),
         {
           loading: "Creating address...",
-          success: createdAddress => ({
+          success: ({ address }) => ({
             message: "Address created.",
-            action: createdAddress?.address
+            action: address
               ? {
                   label: "Copy address",
                   onClick: () => {
-                    void copyCreatedAddress(createdAddress.address);
+                    void copyCreatedAddress(address);
                   },
                 }
               : undefined,
@@ -434,9 +441,21 @@ export const CreateAddressForm = ({
         }
       );
       try {
-        await createAddressToast.unwrap();
+        const createdAddress = await createAddressToast.unwrap();
+        if (generatePin && createdAddress?.pin) {
+          setProvisionedPin({
+            address: createdAddress.address,
+            pin: createdAddress.pin,
+          });
+        } else if (generatePin) {
+          toast.error(
+            "Address created, but no mailbox PIN was returned. Public OTP access is unavailable."
+          );
+        }
       } catch {
         return;
+      } finally {
+        createMutation.reset();
       }
 
       setSelectedIntegrationProvider("");
@@ -465,6 +484,65 @@ export const CreateAddressForm = ({
       }}
     >
       <FieldGroup className="gap-5">
+        {provisionedPin && (
+          <section
+            aria-label="New mailbox PIN"
+            className="rounded-md border border-border p-4 space-y-2"
+          >
+            <p className="font-medium">Save your mailbox PIN now</p>
+            <p className="text-sm text-muted-foreground">
+              This PIN is shown only after creation. Once dismissed, it cannot
+              be displayed again.
+            </p>
+            <p className="text-sm">{provisionedPin.address}</p>
+            <output
+              aria-label="Mailbox PIN"
+              className="font-mono text-lg select-all"
+            >
+              {provisionedPin.pin}
+            </output>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(provisionedPin.pin);
+                    toast.success("Mailbox PIN copied.");
+                  } catch {
+                    toast.error("Could not copy PIN. Copy it manually.");
+                  }
+                }}
+              >
+                Copy mailbox PIN
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setProvisionedPin(null)}
+              >
+                I've saved this PIN
+              </Button>
+            </div>
+          </section>
+        )}
+        <Field orientation="horizontal">
+          <Switch
+            id="generate-mailbox-pin"
+            checked={generatePin}
+            onCheckedChange={setGeneratePin}
+            disabled={createMutation.isPending}
+          />
+          <FieldContent>
+            <FieldLabel htmlFor="generate-mailbox-pin">
+              Generate a mailbox PIN
+            </FieldLabel>
+            <FieldDescription>
+              Allow access to this mailbox through the PIN-protected OTP page.
+              Save the PIN when it is shown after creation.
+            </FieldDescription>
+          </FieldContent>
+        </Field>
         <div className="grid gap-3 md:grid-cols-[minmax(0,1.15fr)_auto_minmax(0,0.85fr)] md:items-start">
           <form.Field
             name="localPart"

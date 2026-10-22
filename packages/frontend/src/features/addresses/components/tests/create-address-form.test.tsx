@@ -30,6 +30,7 @@ const mockedToastPromise = vi.mocked(toast.promise);
 const createMutation = {
   isPending: false,
   mutateAsync: vi.fn(),
+  reset: vi.fn(),
 };
 
 const telegramIntegration = {
@@ -68,6 +69,90 @@ describe("CreateAddressForm", () => {
           ? Promise.resolve(promise())
           : Promise.resolve(promise),
     })) as typeof toast.promise);
+  });
+
+  const submitMailbox = async (withPin: boolean) => {
+    fireEvent.change(screen.getByLabelText("Username"), {
+      target: { value: "owned-mailbox" },
+    });
+    fireEvent.click(screen.getByText("Delete all"));
+    fireEvent.click(screen.getByRole("checkbox"));
+    if (withPin)
+      fireEvent.click(
+        screen.getByRole("switch", { name: "Generate a mailbox PIN" })
+      );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create address" }));
+    });
+  };
+
+  it("requests a PIN only when selected and shows/copies the top-level secret until dismissed", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    createMutation.mutateAsync.mockResolvedValue({
+      address: "owned-mailbox@example.com",
+      pin: "739281",
+    });
+    const view = await renderWithAct(
+      <CreateAddressForm domains={["example.com"]} />
+    );
+    await submitMailbox(true);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Mailbox PIN").textContent).toBe("739281")
+    );
+    expect(createMutation.mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ generatePin: true })
+    );
+    expect(createMutation.reset).toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy mailbox PIN" }));
+    });
+    expect(writeText).toHaveBeenCalledWith("739281");
+    fireEvent.click(
+      screen.getByRole("button", { name: "I've saved this PIN" })
+    );
+    expect(screen.queryByLabelText("Mailbox PIN")).toBeNull();
+    await rerenderWithAct(
+      view,
+      <CreateAddressForm domains={["example.com"]} />
+    );
+    expect(screen.queryByText("739281")).toBeNull();
+    view.unmount();
+    await renderWithAct(<CreateAddressForm domains={["example.com"]} />);
+    expect(screen.queryByText("739281")).toBeNull();
+    expect(window.location.href).not.toContain("739281");
+    expect(JSON.stringify(localStorage)).not.toContain("739281");
+    expect(
+      JSON.stringify(mockedToastPromise.mock.calls.map(call => call[1]))
+    ).not.toContain("739281");
+  });
+
+  it("keeps PIN creation opt-in and never displays a metadata PIN", async () => {
+    createMutation.mutateAsync.mockResolvedValue({
+      address: "owned-mailbox@example.com",
+      meta: { pin: "739281" },
+    });
+    await renderWithAct(<CreateAddressForm domains={["example.com"]} />);
+    await submitMailbox(false);
+    expect(createMutation.mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ generatePin: false })
+    );
+    expect(screen.queryByLabelText("Mailbox PIN")).toBeNull();
+  });
+
+  it("reports missing provisioned PIN instead of inventing a secret", async () => {
+    createMutation.mutateAsync.mockResolvedValue({
+      address: "owned-mailbox@example.com",
+    });
+    await renderWithAct(<CreateAddressForm domains={["example.com"]} />);
+    await submitMailbox(true);
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("no mailbox PIN was returned")
+    );
+    expect(screen.queryByLabelText("Mailbox PIN")).toBeNull();
   });
 
   it("prefills max stored emails and updates it when the configured default arrives", async () => {

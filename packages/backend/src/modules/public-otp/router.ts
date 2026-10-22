@@ -332,7 +332,18 @@ export const createPublicOtpRouter = () => {
           }
         }
       } catch (err) {
-        console.error("Live Mail sync error:", err);
+        console.error(
+          "Live Mail sync error:",
+          err instanceof Error ? err.name : "UpstreamProviderError"
+        );
+        return c.json(
+          {
+            ok: false,
+            error: "Không thể đồng bộ hộp thư từ dịch vụ thư trực tiếp. Vui lòng thử lại sau.",
+            code: "UPSTREAM_PROVIDER_ERROR",
+          },
+          503
+        );
       }
     }
 

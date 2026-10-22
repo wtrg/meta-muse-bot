@@ -539,6 +539,141 @@ describe("public-otp router security, isolation & contract (A01, A02, A04, A05)"
   });
 });
 
+describe("P2: Provider sync error handling and truthful status contract", () => {
+  let app: Hono<AppHonoEnv>;
+  const liveEmail = "live-box@maxxspace.com";
+  const mailboxId = "mb-live-1";
+  const validPin = "654321";
+  const liveToken = "live-token-secret-12345";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetOtpRateLimitsForTesting();
+    app = new Hono<AppHonoEnv>();
+    app.route("/api/public", createPublicOtpRouter());
+  });
+
+  const setupMockDb = (cachedMessages: any[] = []) => {
+    const insertedMessages = [...cachedMessages];
+    mocks.getDb.mockReturnValue({
+      select: vi.fn(() => ({
+        from: () => ({
+          where: () => ({
+            limit: vi.fn().mockImplementation(() => [
+              {
+                id: mailboxId,
+                address: liveEmail,
+                meta: JSON.stringify({ pin: validPin, liveToken }),
+                createdAt: new Date(),
+              },
+            ]),
+            orderBy: () => ({
+              limit: vi.fn().mockImplementation(() => insertedMessages),
+            }),
+          }),
+        }),
+      })),
+      insert: vi.fn(() => ({
+        values: vi.fn().mockImplementation((val) => {
+          insertedMessages.push(val);
+          return Promise.resolve();
+        }),
+      })),
+    });
+    return insertedMessages;
+  };
+
+  it("registered mailbox with valid PIN + provider reject (empty cache) -> 503 ok:false instead of 200 empty", async () => {
+    setupMockDb([]);
+    mocks.fetchLiveMailMessages.mockRejectedValue(new Error("Mail.tm upstream 503 Service Unavailable"));
+
+    const res = await app.request(`/api/public/otp?email=${encodeURIComponent(liveEmail)}`, {
+      headers: { "X-Mailbox-Pin": validPin },
+    });
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.code).toBe("UPSTREAM_PROVIDER_ERROR");
+    expect(body.error).toContain("Không thể đồng bộ hộp thư");
+    expect(body.hasEmails).toBeUndefined();
+    expect(mocks.fetchLiveMailMessages).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchLiveMailMessages).toHaveBeenCalledWith(liveToken);
+  });
+
+  it("registered mailbox with valid PIN + provider reject (non-empty cache) -> 503 ok:false (does not pretend cached messages are fresh)", async () => {
+    const staleMsg = {
+      id: "stale-1",
+      from: "old@muse.ai",
+      subject: "Old OTP 111111",
+      bodyText: "Old code: 111111",
+      bodyHtml: "<p>Old code: 111111</p>",
+      receivedAt: new Date(Date.now() - 3600000),
+    };
+    setupMockDb([staleMsg]);
+    mocks.fetchLiveMailMessages.mockRejectedValue(new Error("Mail.tm network timeout"));
+
+    const res = await app.request(`/api/public/otp?email=${encodeURIComponent(liveEmail)}`, {
+      headers: { "X-Mailbox-Pin": validPin },
+    });
+
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.code).toBe("UPSTREAM_PROVIDER_ERROR");
+    expect(mocks.fetchLiveMailMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it("registered mailbox with valid PIN + provider success empty -> 200 ok:true, hasEmails:false", async () => {
+    setupMockDb([]);
+    mocks.fetchLiveMailMessages.mockResolvedValue([]);
+
+    const res = await app.request(`/api/public/otp?email=${encodeURIComponent(liveEmail)}`, {
+      headers: { "X-Mailbox-Pin": validPin },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.hasEmails).toBe(false);
+    expect(body.message).toBeDefined();
+    expect(mocks.fetchLiveMailMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it("missing or wrong PIN returns 400/401 and provider zeroCalls (fetchLiveMailMessages never invoked)", async () => {
+    setupMockDb([]);
+
+    // 1. Missing PIN -> 400
+    const resMissing = await app.request(`/api/public/otp?email=${encodeURIComponent(liveEmail)}`);
+    expect(resMissing.status).toBe(400);
+    expect(mocks.fetchLiveMailMessages).toHaveBeenCalledTimes(0);
+
+    // 2. Wrong PIN -> 401
+    const resWrong = await app.request(`/api/public/otp?email=${encodeURIComponent(liveEmail)}`, {
+      headers: { "X-Mailbox-Pin": "wrong-pin" },
+    });
+    expect(resWrong.status).toBe(401);
+    expect(mocks.fetchLiveMailMessages).toHaveBeenCalledTimes(0);
+  });
+
+  it("provider error does not leak secret token, password, or raw provider payload", async () => {
+    setupMockDb([]);
+    const sensitiveErrorMsg = `Failed with token ${liveToken} at https://api.mail.tm/messages`;
+    mocks.fetchLiveMailMessages.mockRejectedValue(new Error(sensitiveErrorMsg));
+
+    const res = await app.request(`/api/public/otp?email=${encodeURIComponent(liveEmail)}`, {
+      headers: { "X-Mailbox-Pin": validPin },
+    });
+
+    expect(res.status).toBe(503);
+    const rawText = await res.text();
+    expect(rawText).not.toContain(liveToken);
+    expect(rawText).not.toContain("api.mail.tm");
+    expect(rawText).not.toContain(validPin);
+  });
+});
+
 describe("extractOtpAndLinks hostname validation and phishing defense", () => {
   it("strictly validates allowed hostnames and subdomains", () => {
     expect(isAllowedMagicLinkHostname("muse.ai")).toBe(true);

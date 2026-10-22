@@ -1,6 +1,6 @@
 import React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   useCreateAddressMutation,
@@ -44,6 +44,34 @@ const createWrapper = (queryClient: QueryClient) =>
 describe("address mutations", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("discards the creation mutation containing a one-time PIN after reset", async () => {
+    mocks.useAuth.mockReturnValue({ activeOrganizationId: "org-1" });
+    mocks.createEmailAddress.mockResolvedValue({
+      id: "owned-1",
+      address: "owned@example.com",
+      pin: "739281",
+    });
+    const queryClient = new QueryClient();
+    vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue(undefined);
+    const { result } = renderHook(() => useCreateAddressMutation(), {
+      wrapper: createWrapper(queryClient),
+    });
+    await act(async () => {
+      const created = await result.current.mutateAsync({
+        localPart: "owned",
+        acceptedRiskNotice: true,
+        generatePin: true,
+      });
+      expect(created.pin).toBe("739281");
+    });
+    act(() => result.current.reset());
+    await waitFor(() =>
+      expect(queryClient.getMutationCache().getAll()).toHaveLength(0)
+    );
+    expect(result.current.data).toBeUndefined();
+    queryClient.clear();
   });
 
   it("invalidates the created address detail query after a successful create", async () => {

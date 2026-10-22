@@ -626,6 +626,7 @@ export const createEmailAddress = async (
     prefix?: string;
     ttlMinutes?: number;
     meta?: unknown;
+    generatePin?: boolean;
     domain?: string;
     allowedFromDomains?: string[];
     blockedSenderDomains?: string[];
@@ -640,7 +641,7 @@ export const createEmailAddress = async (
   },
   options?: { organizationId?: string | null }
 ) => {
-  return apiFetch<EmailAddress & { id: string }>(
+  return apiFetch<EmailAddress & { pin?: string }>(
     "/api/email-addresses",
     {
       method: "POST",
