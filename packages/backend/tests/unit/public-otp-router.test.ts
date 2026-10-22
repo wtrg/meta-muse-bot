@@ -462,6 +462,11 @@ describe("public-otp router security, isolation & contract (A01, A02, A04, A05)"
       body: JSON.stringify({ email: testEmail, pin: "000000" }),
     });
     expect(wrongPostRes.status).toBe(401);
+
+    // 4. Legacy query PIN fallback works for compatibility but emits warning header (acknowledging URL risk)
+    const legacyRes = await app.request(`/api/public/otp?email=${encodeURIComponent(testEmail)}&pin=${pin}`);
+    expect(legacyRes.status).toBe(200);
+    expect(legacyRes.headers.get("X-Pin-Transport")).toBe("query-compatibility-warning");
   });
 
   it("Multi-step contract: provisioned secret from storage is accepted via X-Mailbox-Pin header and rejects wrong tenant secret", async () => {

@@ -712,6 +712,43 @@ class MuseG5ExplicitTableTests(unittest.TestCase):
             # Ensure PIN is passed in X-Mailbox-Pin header
             self.assertEqual(req.headers.get("X-mailbox-pin"), "987654")
 
+    def test_t30_save_session_batch_atomic_rollback_on_excel_failure(self):
+        # T30: Batch export fails atomically; if Excel fails after CSV, newly created session CSV is rolled back, caller gets 404
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_exports:
+            session_id = "test_rollback_99"
+            mock_accounts = [
+                {"email": "rb@test.com", "pin": "123456"}
+            ]
+            orig_exports_dir = bot.EXPORTS_DIR
+            bot.EXPORTS_DIR = tmp_exports
+            try:
+                # Patch atomic_write_excel to simulate disk full or openpyxl crash on session_excel_path
+                orig_atomic_excel = bot.atomic_write_excel
+                def fail_on_excel(target_path, wb):
+                    if target_path.endswith(f"muse_session_{session_id}.xlsx"):
+                        raise OSError("Simulated Excel disk full failure")
+                    orig_atomic_excel(target_path, wb)
+
+                with patch.object(bot, "atomic_write_excel", side_effect=fail_on_excel):
+                    with self.assertRaises(OSError):
+                        bot.save_session_csv_and_excel(mock_accounts, session_id)
+
+                # Verify batch rollback: session CSV was rolled back and does not exist!
+                expected_csv = os.path.join(tmp_exports, f"muse_session_{session_id}.csv")
+                expected_xlsx = os.path.join(tmp_exports, f"muse_session_{session_id}.xlsx")
+                self.assertFalse(os.path.exists(expected_csv), "Session CSV must be rolled back on batch failure")
+                self.assertFalse(os.path.exists(expected_xlsx), "Session XLSX must not exist")
+
+                # Verify caller endpoint returns 404 and does NOT return old or corrupt artifact
+                res_csv = self.client.get(f"/api/bot/export-session-csv?session_id={session_id}")
+                self.assertEqual(res_csv.status_code, 404)
+
+                res_xlsx = self.client.get(f"/api/bot/export-session-excel?session_id={session_id}")
+                self.assertEqual(res_xlsx.status_code, 404)
+            finally:
+                bot.EXPORTS_DIR = orig_exports_dir
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -566,44 +566,62 @@ def save_session_csv_and_excel(session_accounts: List[Dict[str, Any]], session_i
     root_latest_csv = os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_session_latest.csv")
     root_latest_excel = os.path.join(os.path.dirname(os.path.dirname(__file__)), "muse_session_latest.xlsx")
     
-    # 1. Ghi File CSV nguyên tử kèm UTF-8 BOM (\ufeff / utf-8-sig)
-    for p in [session_csv_path, latest_csv_path, root_latest_csv]:
-        atomic_write_csv(p, headers, rows)
+    written_session_files = []
+    try:
+        # Build Excel Workbook in memory first to validate openpyxl before touching any files on disk
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
         
-    # 2. Ghi File Excel (.xlsx) chuẩn openpyxl nguyên tử
-    import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment
-    
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Muse Accounts"
-    
-    header_fill = PatternFill(start_color="10B981", end_color="10B981", fill_type="solid")
-    header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
-    center_align = Alignment(horizontal="center", vertical="center")
-    left_align = Alignment(horizontal="left", vertical="center")
-    
-    ws.append(headers)
-    for col_num in range(1, len(headers) + 1):
-        cell = ws.cell(row=1, column=col_num)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = center_align
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Muse Accounts"
         
-    for r_idx, row_data in enumerate(rows, start=2):
-        ws.append(row_data)
-        ws.cell(row=r_idx, column=1).alignment = center_align
-        ws.cell(row=r_idx, column=2).alignment = left_align
-        ws.cell(row=r_idx, column=3).alignment = center_align
-        ws.cell(row=r_idx, column=4).alignment = left_align
+        header_fill = PatternFill(start_color="10B981", end_color="10B981", fill_type="solid")
+        header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+        center_align = Alignment(horizontal="center", vertical="center")
+        left_align = Alignment(horizontal="left", vertical="center")
         
-    ws.column_dimensions['A'].width = 8
-    ws.column_dimensions['B'].width = 34
-    ws.column_dimensions['C'].width = 16
-    ws.column_dimensions['D'].width = 85
-    
-    for p in [session_excel_path, latest_excel_path, root_latest_excel]:
-        atomic_write_excel(p, wb)
+        ws.append(headers)
+        for col_num in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center_align
+            
+        for r_idx, row_data in enumerate(rows, start=2):
+            ws.append(row_data)
+            ws.cell(row=r_idx, column=1).alignment = center_align
+            ws.cell(row=r_idx, column=2).alignment = left_align
+            ws.cell(row=r_idx, column=3).alignment = center_align
+            ws.cell(row=r_idx, column=4).alignment = left_align
+            
+        ws.column_dimensions['A'].width = 8
+        ws.column_dimensions['B'].width = 34
+        ws.column_dimensions['C'].width = 16
+        ws.column_dimensions['D'].width = 85
+
+        # 1. Ghi File CSV của phiên
+        atomic_write_csv(session_csv_path, headers, rows)
+        written_session_files.append(session_csv_path)
+
+        # 2. Ghi File Excel của phiên
+        atomic_write_excel(session_excel_path, wb)
+        written_session_files.append(session_excel_path)
+
+        # 3. Cập nhật latest files sau khi các file phiên đã hoàn tất
+        atomic_write_csv(latest_csv_path, headers, rows)
+        atomic_write_csv(root_latest_csv, headers, rows)
+        atomic_write_excel(latest_excel_path, wb)
+        atomic_write_excel(root_latest_excel, wb)
+    except Exception:
+        # Roll back session artifacts created in this failed batch so caller never sees partial files
+        for p in written_session_files:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        raise
 
 def redact_sensitive(text: str) -> str:
     if not isinstance(text, str):
@@ -1473,8 +1491,11 @@ async def bot_worker(req: StartBotRequest):
                 await asyncio.sleep(3)
                 
         if state.session_accounts:
-            save_session_csv_and_excel(state.session_accounts, state.session_id)
-            add_log(f"📊 Đã tự động xuất File CSV & Excel riêng cho phiên này ({len(state.session_accounts)} tài khoản)!", "success", 100)
+            try:
+                save_session_csv_and_excel(state.session_accounts, state.session_id)
+                add_log(f"📊 Đã tự động xuất File CSV & Excel riêng cho phiên này ({len(state.session_accounts)} tài khoản)!", "success", 100)
+            except Exception as e:
+                add_log(f"Lỗi khi tự động xuất file phiên: {type(e).__name__}: {str(e)}", "error")
             
         add_log(f"Kết thúc phiên: {success_count}/{req.count} tài khoản hoàn tất yêu cầu chat và mã mời.", "success" if success_count == req.count else "warning" if success_count else "error", 100)
     finally:

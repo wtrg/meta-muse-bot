@@ -190,11 +190,16 @@ export const createPublicOtpRouter = () => {
     c.header("Cache-Control", "no-store");
 
     let rawEmail = c.req.query("email") ?? c.req.query("mail");
+    const queryPin = c.req.query("pin")?.trim();
     let pin = (
       c.req.header("x-mailbox-pin") ||
       c.req.header("pin") ||
-      c.req.query("pin")
+      queryPin
     )?.trim();
+
+    if (queryPin && !c.req.header("x-mailbox-pin") && !c.req.header("pin")) {
+      c.header("X-Pin-Transport", "query-compatibility-warning");
+    }
 
     if (c.req.method === "POST") {
       try {
